@@ -723,87 +723,12 @@ async fn main() -> Result<()> {
     
     let manager = UsbSandboxManager::new(config, reporter).await?;
     
-    println!("🎯 Ready to analyze USB devices, husklyfren!");
-    println!("💡 Commands:");
-    println!("   'analyze' - Analyze nixie clock");
-    println!("   'monitor' - Start real-time USB monitoring");
-    println!("   'quit' - Exit the sandbox");
-    println!("🔌 Waiting for input... (type 'help' for commands)");
-
-    // Interactive command loop
-    let stdin = tokio::io::stdin();
-    let mut reader = tokio::io::BufReader::new(stdin);
-    let mut line = String::new();
-
-    loop {
-        print!("sandbox> ");
-        use std::io::Write;
-        std::io::stdout().flush().unwrap();
-        
-        line.clear();
-        
-        // Read user input
-        match tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line).await {
-            Ok(0) => break, // EOF
-            Ok(_) => {
-                let command = line.trim().to_lowercase();
-                
-                match command.as_str() {
-                    "analyze" | "nixie" => {
-                        println!("🚀 Analyzing nixie clock...");
-                        if let Err(e) = manager.analyze_nixie_clock().await {
-                            println!("❌ Analysis failed: {}", e);
-                        }
-                    }
-                    "monitor" | "watch" => {
-                        println!("👀 Starting USB monitoring mode...");
-                        println!("   Plug in your nixie clock now!");
-                        println!("   Press Ctrl+C to stop monitoring");
-                        
-                        // Simulate monitoring for 30 seconds
-                        for i in 1..=30 {
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            if i % 5 == 0 {
-                                println!("   📡 Monitoring... {}s", i);
-                            }
-                        }
-                        println!("   ⏹️ Monitoring stopped");
-                    }
-                    "help" | "h" => {
-                        println!("📋 Available commands:");
-                        println!("   analyze  - Run analysis on nixie clock");
-                        println!("   monitor  - Start USB device monitoring");
-                        println!("   status   - Show sandbox status");
-                        println!("   quit     - Exit the sandbox");
-                        println!("   help     - Show this help");
-                    }
-                    "status" | "s" => {
-                        println!("📊 Sandbox Status:");
-                        println!("   🟢 Sandbox: Active");
-                        println!("   📁 Output: {}", manager.reporter.output_dir.display());
-                        println!("   🔧 VM Type: {:?}", manager.config.vm_type);
-                        println!("   💾 Memory: {}MB", manager.config.memory_limit_mb);
-                    }
-                    "quit" | "exit" | "q" => {
-                        println!("👋 Shutting down USB sandbox...");
-                        break;
-                    }
-                    "" => {
-                        // Empty line, just continue
-                    }
-                    _ => {
-                        println!("❓ Unknown command: '{}'. Type 'help' for available commands.", command);
-                    }
-                }
-            }
-            Err(e) => {
-                println!("❌ Error reading input: {}", e);
-                break;
-            }
-        }
-    }
+    println!("🎯 Ready to analyze your Ukrainian nixie clock, husklyfren!");
     
-    println!("🏁 USB Sandbox shutdown complete. Goodbye, fren!");
+    // Simulate nixie clock analysis
+    manager.analyze_nixie_clock().await?;
+    
+    println!("🏁 Analysis complete! Check the output directory for results.");
     
     Ok(())
 }

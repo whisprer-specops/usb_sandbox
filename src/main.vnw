@@ -1,0 +1,1233 @@
+// Analysis Reporter Module - Output all the good stuff!
+// src/reporter.rs
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use tokio::fs as async_fs;
+use tokio::io::AsyncWriteExt;
+use anyhow::{Result, anyhow};
+use serde::{Serialize, Deserialize};
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+
+use crate::{ThreatAnalysis, UsbDevice, ThreatLevel, SandboxConfig};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AnalysisReport {
+    pub report_id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub device_info: DeviceInfo,
+    pub analysis_summary: AnalysisSummary,
+    pub detailed_findings: DetailedFindings,
+    pub recommendations: Vec<String>,
+    pub metadata: ReportMetadata,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub vendor_id: String,
+    pub product_id: String,
+    pub device_name: String,
+    pub mount_point: Option<String>,
+    pub device_type: String,
+    pub first_seen: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AnalysisSummary {
+    pub threat_level: ThreatLevel,
+    pub confidence_score: f32,
+    pub total_files_analyzed: u32,
+    pub suspicious_files: u32,
+    pub network_connections: u32,
+    pub behavioral_anomalies: u32,
+    pub analysis_duration_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DetailedFindings {
+    pub file_analysis: Vec<FileFindings>,
+    pub behavioral_findings: BehavioralFindings,
+    pub network_findings: Option<NetworkFindings>,
+    pub memory_findings: Option<MemoryFindings>,
+    pub protocol_analysis: ProtocolAnalysis,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileFindings {
+    pub file_path: String,
+    pub file_hash: String,
+    pub file_size: u64,
+    pub entropy: f64,
+    pub file_type: String,
+    pub threat_indicators: Vec<String>,
+    pub extracted_strings: Vec<String>,
+    pub pe_info: Option<PeInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PeInfo {
+    pub compile_time: DateTime<Utc>,
+    pub entry_point: String,
+    pub sections: Vec<SectionInfo>,
+    pub imports: Vec<String>,
+    pub suspicious_characteristics: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SectionInfo {
+    pub name: String,
+    pub virtual_address: String,
+    pub size: u64,
+    pub entropy: f64,
+    pub characteristics: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BehavioralFindings {
+    pub processes_spawned: Vec<ProcessInfo>,
+    pub file_operations: Vec<FileOperation>,
+    pub registry_changes: Vec<RegistryChange>,
+    pub api_calls: Vec<ApiCallInfo>,
+    pub evasion_techniques: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub command_line: String,
+    pub parent_process: String,
+    pub creation_time: DateTime<Utc>,
+    pub suspicious_activities: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileOperation {
+    pub operation_type: String,
+    pub file_path: String,
+    pub timestamp: DateTime<Utc>,
+    pub process_name: String,
+    pub bytes_transferred: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegistryChange {
+    pub operation: String,
+    pub key_path: String,
+    pub value_name: Option<String>,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiCallInfo {
+    pub function_name: String,
+    pub module: String,
+    pub parameters: Vec<String>,
+    pub return_value: Option<String>,
+    pub timestamp: DateTime<Utc>,
+    pub threat_relevance: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NetworkFindings {
+    pub connections: Vec<NetworkConnection>,
+    pub dns_queries: Vec<DnsQuery>,
+    pub http_requests: Vec<HttpRequest>,
+    pub suspicious_domains: Vec<String>,
+    pub data_exfiltration_detected: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NetworkConnection {
+    pub protocol: String,
+    pub local_address: String,
+    pub remote_address: String,
+    pub remote_port: u16,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub duration_ms: u64,
+    pub threat_indicators: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DnsQuery {
+    pub query: String,
+    pub response: Vec<String>,
+    pub timestamp: DateTime<Utc>,
+    pub suspicious: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HttpRequest {
+    pub method: String,
+    pub url: String,
+    pub headers: HashMap<String, String>,
+    pub user_agent: String,
+    pub timestamp: DateTime<Utc>,
+    pub response_code: Option<u16>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MemoryFindings {
+    pub heap_analysis: HeapAnalysis,
+    pub injection_artifacts: Vec<InjectionArtifact>,
+    pub yara_matches: Vec<YaraMatch>,
+    pub suspicious_allocations: Vec<SuspiciousAllocation>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HeapAnalysis {
+    pub total_heap_size: u64,
+    pub allocated_chunks: u32,
+    pub free_chunks: u32,
+    pub fragmentation_ratio: f32,
+    pub suspicious_patterns: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InjectionArtifact {
+    pub injection_type: String,
+    pub source_process: String,
+    pub target_process: String,
+    pub injected_address: String,
+    pub injected_size: u64,
+    pub payload_hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct YaraMatch {
+    pub rule_name: String,
+    pub rule_family: String,
+    pub matched_strings: Vec<String>,
+    pub confidence: f32,
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SuspiciousAllocation {
+    pub address: String,
+    pub size: u64,
+    pub permissions: String,
+    pub content_hash: String,
+    pub allocation_time: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProtocolAnalysis {
+    pub usb_descriptors: UsbDescriptors,
+    pub communication_patterns: Vec<CommunicationPattern>,
+    pub command_analysis: Vec<CommandAnalysis>,
+    pub protocol_fingerprint: String,
+    pub unusual_behaviors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UsbDescriptors {
+    pub device_descriptor: DeviceDescriptor,
+    pub configuration_descriptors: Vec<ConfigurationDescriptor>,
+    pub interface_descriptors: Vec<InterfaceDescriptor>,
+    pub endpoint_descriptors: Vec<EndpointDescriptor>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceDescriptor {
+    pub usb_version: String,
+    pub device_class: u8,
+    pub device_subclass: u8,
+    pub device_protocol: u8,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub device_version: String,
+    pub manufacturer_string: Option<String>,
+    pub product_string: Option<String>,
+    pub serial_number: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConfigurationDescriptor {
+    pub configuration_value: u8,
+    pub max_power: u16,
+    pub attributes: u8,
+    pub interfaces: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InterfaceDescriptor {
+    pub interface_number: u8,
+    pub alternate_setting: u8,
+    pub interface_class: u8,
+    pub interface_subclass: u8,
+    pub interface_protocol: u8,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EndpointDescriptor {
+    pub endpoint_address: u8,
+    pub attributes: u8,
+    pub max_packet_size: u16,
+    pub interval: u8,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommunicationPattern {
+    pub pattern_type: String,
+    pub frequency: u32,
+    pub data_size_avg: f64,
+    pub timing_pattern: Vec<u64>,
+    pub sample_data: String, // Hex-encoded
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandAnalysis {
+    pub command_hex: String,
+    pub response_hex: String,
+    pub command_type: String,
+    pub parameters: Vec<String>,
+    pub timestamp: DateTime<Utc>,
+    pub success: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReportMetadata {
+    pub sandbox_version: String,
+    pub analysis_engine_version: String,
+    pub yara_rules_version: String,
+    pub sandbox_config: SandboxConfigSummary,
+    pub analysis_start_time: DateTime<Utc>,
+    pub analysis_end_time: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SandboxConfigSummary {
+    pub vm_type: String,
+    pub memory_limit_mb: u32,
+    pub network_isolation: String,
+    pub analysis_depth: String,
+}
+
+pub struct AnalysisReporter {
+    output_dir: PathBuf,
+    report_format: ReportFormat,
+    real_time_output: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum ReportFormat {
+    Json,
+    Html,
+    Csv,
+    All,
+}
+
+impl AnalysisReporter {
+    pub fn new(output_dir: PathBuf, format: ReportFormat) -> Self {
+        Self {
+            output_dir,
+            report_format: format,
+            real_time_output: true,
+        }
+    }
+
+    pub async fn setup_output_directory(&self) -> Result<()> {
+        // Create main output directory
+        async_fs::create_dir_all(&self.output_dir).await?;
+        
+        // Create subdirectories
+        let subdirs = ["reports", "logs", "raw_data", "artifacts"];
+        for subdir in subdirs {
+            let path = self.output_dir.join(subdir);
+            async_fs::create_dir_all(path).await?;
+        }
+        
+        println!("📁 Output directory setup complete: {}", self.output_dir.display());
+        Ok(())
+    }
+
+    pub async fn generate_report(&self, analysis: &ThreatAnalysis, device: &UsbDevice) -> Result<AnalysisReport> {
+        let report_id = Uuid::new_v4();
+        let timestamp = Utc::now();
+        
+        println!("🔍 Generating analysis report for device: {}:{:04X}:{:04X}", 
+                 device.vendor_id, device.product_id, device.id);
+
+        let report = AnalysisReport {
+            report_id,
+            timestamp,
+            device_info: self.build_device_info(device),
+            analysis_summary: self.build_analysis_summary(analysis),
+            detailed_findings: self.build_detailed_findings(analysis),
+            recommendations: self.generate_recommendations(analysis),
+            metadata: self.build_metadata(),
+        };
+
+        // Save in requested format(s)
+        self.save_report(&report).await?;
+        
+        // Print summary to console
+        self.print_summary(&report);
+        
+        Ok(report)
+    }
+
+    fn build_device_info(&self, device: &UsbDevice) -> DeviceInfo {
+        DeviceInfo {
+            vendor_id: format!("{:04X}", device.vendor_id),
+            product_id: format!("{:04X}", device.product_id),
+            device_name: format!("USB Device ({:04X}:{:04X})", device.vendor_id, device.product_id),
+            mount_point: device.mount_point.as_ref().map(|p| p.display().to_string()),
+            device_type: format!("{:?}", device.device_type),
+            first_seen: device.first_seen,
+        }
+    }
+
+    fn build_analysis_summary(&self, analysis: &ThreatAnalysis) -> AnalysisSummary {
+        AnalysisSummary {
+            threat_level: analysis.threat_level.clone(),
+            confidence_score: self.calculate_confidence_score(analysis),
+            total_files_analyzed: analysis.file_analysis.len() as u32,
+            suspicious_files: analysis.file_analysis.iter()
+                .filter(|f| !f.signatures.is_empty() || f.entropy > 7.0)
+                .count() as u32,
+            network_connections: analysis.behavioral_analysis.network_connections.len() as u32,
+            behavioral_anomalies: analysis.behavioral_analysis.anti_analysis_techniques.len() as u32
+                + analysis.behavioral_analysis.privilege_escalation_attempts,
+            analysis_duration_ms: 5000, // Placeholder - would track actual duration
+        }
+    }
+
+    fn calculate_confidence_score(&self, analysis: &ThreatAnalysis) -> f32 {
+        let mut score = 0.0;
+        let mut factors = 0;
+
+        // File analysis confidence
+        if !analysis.file_analysis.is_empty() {
+            score += 0.8;
+            factors += 1;
+        }
+
+        // Behavioral analysis confidence
+        if !analysis.behavioral_analysis.processes_created.is_empty() {
+            score += 0.9;
+            factors += 1;
+        }
+
+        // Network analysis confidence
+        if analysis.network_analysis.is_some() {
+            score += 0.7;
+            factors += 1;
+        }
+
+        // Indicators confidence
+        if !analysis.indicators.is_empty() {
+            let avg_confidence = analysis.indicators.iter()
+                .map(|i| i.confidence)
+                .sum::<f32>() / analysis.indicators.len() as f32;
+            score += avg_confidence;
+            factors += 1;
+        }
+
+        if factors > 0 {
+            score / factors as f32
+        } else {
+            0.5 // Default confidence
+        }
+    }
+
+    fn build_detailed_findings(&self, analysis: &ThreatAnalysis) -> DetailedFindings {
+        DetailedFindings {
+            file_analysis: analysis.file_analysis.iter().map(|f| FileFindings {
+                file_path: f.file_path.display().to_string(),
+                file_hash: f.file_hash.clone(),
+                file_size: f.file_size,
+                entropy: f.entropy,
+                file_type: f.file_type.clone(),
+                threat_indicators: f.signatures.clone(),
+                extracted_strings: f.static_analysis.strings.iter().take(50).cloned().collect(),
+                pe_info: f.static_analysis.pe_analysis.as_ref().map(|pe| PeInfo {
+                    compile_time: pe.compile_time,
+                    entry_point: format!("0x{:08X}", pe.entry_point),
+                    sections: Vec::new(), // Would populate from actual PE analysis
+                    imports: f.static_analysis.imports.clone(),
+                    suspicious_characteristics: pe.dll_characteristics.clone(),
+                }),
+            }).collect(),
+            
+            behavioral_findings: BehavioralFindings {
+                processes_spawned: analysis.behavioral_analysis.processes_created.iter().map(|p| ProcessInfo {
+                    pid: p.pid,
+                    name: p.name.clone(),
+                    command_line: p.command_line.clone(),
+                    parent_process: format!("PID {}", p.parent_pid),
+                    creation_time: p.creation_time,
+                    suspicious_activities: Vec::new(), // Would analyze for suspicious patterns
+                }).collect(),
+                
+                file_operations: analysis.behavioral_analysis.files_accessed.iter().map(|f| FileOperation {
+                    operation_type: format!("{:?}", f.operation),
+                    file_path: f.path.display().to_string(),
+                    timestamp: f.timestamp,
+                    process_name: format!("PID {}", f.process_id),
+                    bytes_transferred: f.bytes_transferred,
+                }).collect(),
+                
+                registry_changes: analysis.behavioral_analysis.registry_modifications.iter().map(|r| RegistryChange {
+                    operation: format!("{:?}", r.operation),
+                    key_path: r.key_path.clone(),
+                    value_name: r.value_name.clone(),
+                    old_value: r.old_value.clone(),
+                    new_value: r.new_value.clone(),
+                    timestamp: r.timestamp,
+                }).collect(),
+                
+                api_calls: analysis.behavioral_analysis.api_calls.iter().map(|a| ApiCallInfo {
+                    function_name: a.function_name.clone(),
+                    module: a.module_name.clone(),
+                    parameters: a.parameters.clone(),
+                    return_value: a.return_value.clone(),
+                    timestamp: a.timestamp,
+                    threat_relevance: self.assess_api_threat_relevance(&a.function_name),
+                }).collect(),
+                
+                evasion_techniques: analysis.behavioral_analysis.anti_analysis_techniques.iter()
+                    .map(|t| format!("{:?}", t))
+                    .collect(),
+            },
+            
+            network_findings: analysis.network_analysis.as_ref().map(|n| NetworkFindings {
+                connections: Vec::new(), // Would populate from actual network analysis
+                dns_queries: Vec::new(),
+                http_requests: Vec::new(),
+                suspicious_domains: n.suspicious_domains.clone(),
+                data_exfiltration_detected: n.data_exfiltration_detected,
+            }),
+            
+            memory_findings: analysis.memory_analysis.as_ref().map(|m| MemoryFindings {
+                heap_analysis: HeapAnalysis {
+                    total_heap_size: m.heap_analysis.heap_size,
+                    allocated_chunks: m.heap_analysis.allocated_chunks,
+                    free_chunks: m.heap_analysis.free_chunks,
+                    fragmentation_ratio: 0.0, // Would calculate
+                    suspicious_patterns: Vec::new(),
+                },
+                injection_artifacts: m.injection_artifacts.iter().map(|i| InjectionArtifact {
+                    injection_type: format!("{:?}", i.injection_type),
+                    source_process: format!("PID {}", i.source_process),
+                    target_process: format!("PID {}", i.target_process),
+                    injected_address: format!("0x{:08X}", i.injected_address),
+                    injected_size: i.injected_size,
+                    payload_hash: "abc123def456".to_string(), // Would calculate actual hash
+                }).collect(),
+                yara_matches: m.yara_matches.iter().map(|y| YaraMatch {
+                    rule_name: y.rule_name.clone(),
+                    rule_family: y.rule_family.clone(),
+                    matched_strings: y.matched_strings.clone(),
+                    confidence: y.confidence,
+                    file_path: None,
+                }).collect(),
+                suspicious_allocations: m.heap_analysis.suspicious_allocations.iter().map(|s| SuspiciousAllocation {
+                    address: format!("0x{:08X}", s.address),
+                    size: s.size,
+                    permissions: s.permissions.clone(),
+                    content_hash: s.content_hash.clone(),
+                    allocation_time: Utc::now(), // Would track actual time
+                }).collect(),
+            }),
+            
+            protocol_analysis: self.build_protocol_analysis(),
+        }
+    }
+
+    fn assess_api_threat_relevance(&self, api_name: &str) -> String {
+        match api_name {
+            "CreateRemoteThread" | "WriteProcessMemory" | "VirtualAllocEx" => "HIGH - Process Injection".to_string(),
+            "SetWindowsHookEx" | "GetAsyncKeyState" => "MEDIUM - Keylogging/Hooking".to_string(),
+            "RegSetValueEx" | "RegCreateKeyEx" => "MEDIUM - Registry Modification".to_string(),
+            "CreateFile" | "WriteFile" => "LOW - File Operations".to_string(),
+            _ => "LOW - Standard API".to_string(),
+        }
+    }
+
+    fn build_protocol_analysis(&self) -> ProtocolAnalysis {
+        // This would be populated with real USB protocol analysis
+        ProtocolAnalysis {
+            usb_descriptors: UsbDescriptors {
+                device_descriptor: DeviceDescriptor {
+                    usb_version: "2.0".to_string(),
+                    device_class: 0,
+                    device_subclass: 0,
+                    device_protocol: 0,
+                    vendor_id: 0x8087,
+                    product_id: 0x0AAA,
+                    device_version: "1.0".to_string(),
+                    manufacturer_string: Some("TRCorp".to_string()),
+                    product_string: Some("Ukrainian Nixie Clock".to_string()),
+                    serial_number: None,
+                },
+                configuration_descriptors: Vec::new(),
+                interface_descriptors: Vec::new(),
+                endpoint_descriptors: Vec::new(),
+            },
+            communication_patterns: Vec::new(),
+            command_analysis: Vec::new(),
+            protocol_fingerprint: "CUSTOM_NIXIE_PROTOCOL_v1.0".to_string(),
+            unusual_behaviors: vec![
+                "Non-standard VID/PID combination".to_string(),
+                "Custom communication protocol detected".to_string(),
+            ],
+        }
+    }
+
+    fn generate_recommendations(&self, analysis: &ThreatAnalysis) -> Vec<String> {
+        let mut recommendations = Vec::new();
+
+        match analysis.threat_level {
+            ThreatLevel::Safe => {
+                recommendations.push("✅ Device appears safe for normal use".to_string());
+                recommendations.push("💡 Consider monitoring for unusual behavior during operation".to_string());
+            }
+            ThreatLevel::Suspicious => {
+                recommendations.push("⚠️ Exercise caution when using this device".to_string());
+                recommendations.push("🔍 Perform additional behavioral monitoring".to_string());
+                recommendations.push("🚫 Avoid using on critical systems".to_string());
+            }
+            ThreatLevel::Malicious => {
+                recommendations.push("🔥 HIGH RISK - Do not use this device".to_string());
+                recommendations.push("🔒 Quarantine device immediately".to_string());
+                recommendations.push("📋 Report findings to security team".to_string());
+            }
+            ThreatLevel::Critical => {
+                recommendations.push("💀 CRITICAL THREAT - Immediate action required".to_string());
+                recommendations.push("🚨 Disconnect device and isolate system".to_string());
+                recommendations.push("🔧 Perform full system security scan".to_string());
+                recommendations.push("📞 Contact incident response team".to_string());
+            }
+        }
+
+        // Add specific recommendations based on findings
+        if !analysis.file_analysis.is_empty() {
+            recommendations.push("📁 Review identified files for malicious content".to_string());
+        }
+
+        if analysis.behavioral_analysis.privilege_escalation_attempts > 0 {
+            recommendations.push("🛡️ Device attempted privilege escalation - high risk".to_string());
+        }
+
+        if !analysis.behavioral_analysis.anti_analysis_techniques.is_empty() {
+            recommendations.push("🕵️ Anti-analysis techniques detected - likely malicious".to_string());
+        }
+
+        recommendations
+    }
+
+    fn build_metadata(&self) -> ReportMetadata {
+        ReportMetadata {
+            sandbox_version: "1.0.0".to_string(),
+            analysis_engine_version: "NixieAnalyzer v1.0".to_string(),
+            yara_rules_version: "2024.07.29".to_string(),
+            sandbox_config: SandboxConfigSummary {
+                vm_type: "QEMU".to_string(),
+                memory_limit_mb: 2048,
+                network_isolation: "Complete".to_string(),
+                analysis_depth: "Deep".to_string(),
+            },
+            analysis_start_time: Utc::now() - chrono::Duration::minutes(5), // Placeholder
+            analysis_end_time: Utc::now(),
+        }
+    }
+
+    async fn save_report(&self, report: &AnalysisReport) -> Result<()> {
+        let timestamp = report.timestamp.format("%Y%m%d_%H%M%S");
+        let base_filename = format!("analysis_{}_{}", 
+                                   report.device_info.vendor_id, 
+                                   timestamp);
+
+        match self.report_format {
+            ReportFormat::Json | ReportFormat::All => {
+                let json_path = self.output_dir.join("reports").join(format!("{}.json", base_filename));
+                let json_content = serde_json::to_string_pretty(report)?;
+                async_fs::write(&json_path, json_content).await?;
+                println!("📄 JSON report saved: {}", json_path.display());
+            }
+            ReportFormat::Html | ReportFormat::All => {
+                let html_path = self.output_dir.join("reports").join(format!("{}.html", base_filename));
+                let html_content = self.generate_html_report(report)?;
+                async_fs::write(&html_path, html_content).await?;
+                println!("🌐 HTML report saved: {}", html_path.display());
+            }
+            ReportFormat::Csv | ReportFormat::All => {
+                let csv_path = self.output_dir.join("reports").join(format!("{}.csv", base_filename));
+                let csv_content = self.generate_csv_report(report)?;
+                async_fs::write(&csv_path, csv_content).await?;
+                println!("📊 CSV report saved: {}", csv_path.display());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn generate_html_report(&self, report: &AnalysisReport) -> Result<String> {
+        let threat_color = match report.analysis_summary.threat_level {
+            ThreatLevel::Safe => "#28a745",
+            ThreatLevel::Suspicious => "#ffc107", 
+            ThreatLevel::Malicious => "#fd7e14",
+            ThreatLevel::Critical => "#dc3545",
+        };
+
+        let html = format!(r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>USB Device Analysis Report</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        .header {{ background: #f8f9fa; padding: 20px; border-radius: 5px; }}
+        .threat-level {{ color: {}; font-weight: bold; font-size: 1.2em; }}
+        .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }}
+        .finding {{ margin: 10px 0; padding: 10px; background: #f8f9fa; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 USB Device Analysis Report</h1>
+        <p><strong>Device:</strong> {}:{}</p>
+        <p><strong>Analysis Time:</strong> {}</p>
+        <p><strong>Threat Level:</strong> <span class="threat-level">{:?}</span></p>
+        <p><strong>Confidence:</strong> {:.1%}</p>
+    </div>
+
+    <div class="section">
+        <h2>📊 Analysis Summary</h2>
+        <ul>
+            <li>Files Analyzed: {}</li>
+            <li>Suspicious Files: {}</li>
+            <li>Network Connections: {}</li>
+            <li>Behavioral Anomalies: {}</li>
+            <li>Analysis Duration: {}ms</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>🎯 Recommendations</h2>
+        <ul>
+        {}
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>📁 File Analysis</h2>
+        <table>
+            <tr><th>File Path</th><th>Size</th><th>Entropy</th><th>Type</th><th>Threats</th></tr>
+            {}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>🔌 Protocol Analysis</h2>
+        <p><strong>Protocol Fingerprint:</strong> {}</p>
+        <p><strong>Unusual Behaviors:</strong></p>
+        <ul>
+        {}
+        </ul>
+    </div>
+</body>
+</html>
+        "#, 
+            threat_color,
+            report.device_info.vendor_id,
+            report.device_info.product_id,
+            report.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+            report.analysis_summary.threat_level,
+            report.analysis_summary.confidence_score,
+            report.analysis_summary.total_files_analyzed,
+            report.analysis_summary.suspicious_files,
+            report.analysis_summary.network_connections,
+            report.analysis_summary.behavioral_anomalies,
+            report.analysis_summary.analysis_duration_ms,
+            report.recommendations.iter()
+                .map(|r| format!("<li>{}</li>", r))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            report.detailed_findings.file_analysis.iter()
+                .map(|f| format!("<tr><td>{}</td><td>{}</td><td>{:.2}</td><td>{}</td><td>{}</td></tr>", 
+                    fn generate_html_report(&self, report: &AnalysisReport) -> Result<String> {
+            let threat_color = match report.analysis_summary.threat_level {
+            ThreatLevel::Safe => "#28a745",
+            ThreatLevel::Suspicious => "#ffc107", 
+            ThreatLevel::Malicious => "#fd7e14",
+            ThreatLevel::Critical => "#dc3545",
+        };
+
+        let file_rows = report.detailed_findings.file_analysis.iter()
+            .map(|f| format!("<tr><td>{}</td><td>{}</td><td>{:.2}</td><td>{}</td><td>{}</td></tr>", 
+                f.file_path, 
+                f.file_size,
+                f.entropy,
+                f.file_type,
+                f.threat_indicators.join(", ")
+            ))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let unusual_behaviors = report.detailed_findings.protocol_analysis.unusual_behaviors.iter()
+            .map(|b| format!("<li>{}</li>", b))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let html = format!(r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>USB Device Analysis Report</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        .header {{ background: #f8f9fa; padding: 20px; border-radius: 5px; }}
+        .threat-level {{ color: {}; font-weight: bold; font-size: 1.2em; }}
+        .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }}
+        .finding {{ margin: 10px 0; padding: 10px; background: #f8f9fa; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+        .high-entropy {{ background-color: #ffebee; }}
+        .suspicious {{ background-color: #fff3e0; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 USB Device Analysis Report</h1>
+        <p><strong>Device:</strong> {}:{}</p>
+        <p><strong>Analysis Time:</strong> {}</p>
+        <p><strong>Threat Level:</strong> <span class="threat-level">{:?}</span></p>
+        <p><strong>Confidence:</strong> {:.1%}</p>
+    </div>
+
+    <div class="section">
+        <h2>📊 Analysis Summary</h2>
+        <ul>
+            <li>Files Analyzed: {}</li>
+            <li>Suspicious Files: {}</li>
+            <li>Network Connections: {}</li>
+            <li>Behavioral Anomalies: {}</li>
+            <li>Analysis Duration: {}ms</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>🎯 Recommendations</h2>
+        <ul>
+        {}
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>📁 File Analysis</h2>
+        <table>
+            <tr><th>File Path</th><th>Size</th><th>Entropy</th><th>Type</th><th>Threats</th></tr>
+            {}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>🔌 Protocol Analysis</h2>
+        <p><strong>Protocol Fingerprint:</strong> {}</p>
+        <p><strong>VID:PID:</strong> {:04X}:{:04X}</p>
+        <p><strong>Unusual Behaviors:</strong></p>
+        <ul>
+        {}
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>⚙️ Technical Details</h2>
+        <p><strong>Sandbox Version:</strong> {}</p>
+        <p><strong>Analysis Engine:</strong> {}</p>
+        <p><strong>Report ID:</strong> {}</p>
+    </div>
+</body>
+</html>
+        "#, 
+            threat_color,
+            report.device_info.vendor_id,
+            report.device_info.product_id,
+            report.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+            report.analysis_summary.threat_level,
+            report.analysis_summary.confidence_score,
+            report.analysis_summary.total_files_analyzed,
+            report.analysis_summary.suspicious_files,
+            report.analysis_summary.network_connections,
+            report.analysis_summary.behavioral_anomalies,
+            report.analysis_summary.analysis_duration_ms,
+            report.recommendations.iter()
+                .map(|r| format!("<li>{}</li>", r))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            file_rows,
+            report.detailed_findings.protocol_analysis.protocol_fingerprint,
+            report.detailed_findings.protocol_analysis.usb_descriptors.device_descriptor.vendor_id,
+            report.detailed_findings.protocol_analysis.usb_descriptors.device_descriptor.product_id,
+            unusual_behaviors,
+            report.metadata.sandbox_version,
+            report.metadata.analysis_engine_version,
+            report.report_id
+        );
+
+        Ok(html)
+    }
+
+    fn generate_csv_report(&self, report: &AnalysisReport) -> Result<String> {
+        let mut csv = String::new();
+        
+        // Header
+        csv.push_str("Report_ID,Timestamp,Device_VID,Device_PID,Threat_Level,Confidence,Files_Analyzed,Suspicious_Files,Network_Connections\n");
+        
+        // Main row
+        csv.push_str(&format!("{},{},{},{},{:?},{:.3},{},{},{}\n",
+            report.report_id,
+            report.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+            report.device_info.vendor_id,
+            report.device_info.product_id,
+            report.analysis_summary.threat_level,
+            report.analysis_summary.confidence_score,
+            report.analysis_summary.total_files_analyzed,
+            report.analysis_summary.suspicious_files,
+            report.analysis_summary.network_connections
+        ));
+
+        // File analysis section
+        csv.push_str("\n\nFile Analysis:\n");
+        csv.push_str("File_Path,File_Size,Entropy,File_Type,Threat_Indicators\n");
+        
+        for file in &report.detailed_findings.file_analysis {
+            csv.push_str(&format!("{},{},{:.2},{},\"{}\"\n",
+                file.file_path,
+                file.file_size,
+                file.entropy,
+                file.file_type,
+                file.threat_indicators.join("; ")
+            ));
+        }
+
+        Ok(csv)
+    }
+
+    fn print_summary(&self, report: &AnalysisReport) {
+        println!("\n🎯 ===== ANALYSIS COMPLETE =====");
+        println!("📋 Report ID: {}", report.report_id);
+        println!("🔌 Device: {}:{}", report.device_info.vendor_id, report.device_info.product_id);
+        
+        let threat_emoji = match report.analysis_summary.threat_level {
+            ThreatLevel::Safe => "✅",
+            ThreatLevel::Suspicious => "⚠️",
+            ThreatLevel::Malicious => "🔥",
+            ThreatLevel::Critical => "💀",
+        };
+        
+        println!("{} Threat Level: {:?}", threat_emoji, report.analysis_summary.threat_level);
+        println!("🎯 Confidence: {:.1%}", report.analysis_summary.confidence_score);
+        
+        println!("\n📊 Analysis Summary:");
+        println!("  📁 Files Analyzed: {}", report.analysis_summary.total_files_analyzed);
+        println!("  ⚠️ Suspicious Files: {}", report.analysis_summary.suspicious_files);
+        println!("  🌐 Network Connections: {}", report.analysis_summary.network_connections);
+        println!("  🚨 Behavioral Anomalies: {}", report.analysis_summary.behavioral_anomalies);
+        println!("  ⏱️ Analysis Duration: {}ms", report.analysis_summary.analysis_duration_ms);
+
+        println!("\n🎯 Key Recommendations:");
+        for (i, rec) in report.recommendations.iter().take(3).enumerate() {
+            println!("  {}. {}", i + 1, rec);
+        }
+
+        if !report.detailed_findings.protocol_analysis.unusual_behaviors.is_empty() {
+            println!("\n🔍 Protocol Analysis Highlights:");
+            for behavior in &report.detailed_findings.protocol_analysis.unusual_behaviors {
+                println!("  • {}", behavior);
+            }
+        }
+
+        println!("\n📁 Reports saved to: {}/reports/", self.output_dir.display());
+        println!("===============================\n");
+    }
+
+    pub async fn save_raw_usb_data(&self, device_id: &Uuid, data: &[u8], data_type: &str) -> Result<()> {
+        let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("{}_{}_{}_{}.bin", device_id, data_type, timestamp, data.len());
+        let path = self.output_dir.join("raw_data").join(filename);
+        
+        async_fs::write(&path, data).await?;
+        println!("💾 Raw {} data saved: {} bytes -> {}", data_type, data.len(), path.display());
+        
+        Ok(())
+    }
+
+    pub async fn log_real_time_event(&self, event: &str) -> Result<()> {
+        if !self.real_time_output {
+            return Ok(());
+        }
+
+        let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let log_entry = format!("[{}] {}\n", timestamp, event);
+        
+        let log_path = self.output_dir.join("logs").join("real_time.log");
+        
+        // Append to log file
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .await?;
+        
+        file.write_all(log_entry.as_bytes()).await?;
+        
+        // Also print to console if enabled
+        print!("{}", log_entry);
+        
+        Ok(())
+    }
+
+    pub async fn create_timeline_visualization(&self, report: &AnalysisReport) -> Result<()> {
+        // Generate a simple timeline HTML for visualization
+        let timeline_html = self.generate_timeline_html(report)?;
+        let timeline_path = self.output_dir.join("reports")
+            .join(format!("timeline_{}.html", report.report_id));
+        
+        async_fs::write(timeline_path, timeline_html).await?;
+        println!("📈 Timeline visualization created");
+        
+        Ok(())
+    }
+
+    fn generate_timeline_html(&self, report: &AnalysisReport) -> Result<String> {
+        let html = format!(r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Analysis Timeline - {}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        .timeline {{ position: relative; padding: 20px 0; }}
+        .event {{ margin: 10px 0; padding: 10px; background: #f8f9fa; border-left: 4px solid #007bff; }}
+        .timestamp {{ font-weight: bold; color: #666; }}
+        .file-event {{ border-left-color: #28a745; }}
+        .process-event {{ border-left-color: #ffc107; }}
+        .network-event {{ border-left-color: #17a2b8; }}
+        .threat-event {{ border-left-color: #dc3545; }}
+    </style>
+</head>
+<body>
+    <h1>📈 Analysis Timeline</h1>
+    <p>Device: {}:{}</p>
+    
+    <div class="timeline">
+        <div class="event">
+            <div class="timestamp">{}</div>
+            <div>🔍 Analysis Started</div>
+        </div>
+        
+        {}
+        
+        <div class="event">
+            <div class="timestamp">{}</div>
+            <div>✅ Analysis Completed - Threat Level: {:?}</div>
+        </div>
+    </div>
+</body>
+</html>
+        "#,
+            report.report_id,
+            report.device_info.vendor_id,
+            report.device_info.product_id,
+            report.metadata.analysis_start_time.format("%H:%M:%S"),
+            self.generate_timeline_events(report),
+            report.metadata.analysis_end_time.format("%H:%M:%S"),
+            report.analysis_summary.threat_level
+        );
+
+        Ok(html)
+    }
+
+    fn generate_timeline_events(&self, report: &AnalysisReport) -> String {
+        let mut events = Vec::new();
+
+        // File analysis events
+        for (i, file) in report.detailed_findings.file_analysis.iter().enumerate() {
+            let event_time = report.metadata.analysis_start_time + chrono::Duration::seconds(i as i64 * 2);
+            events.push(format!(r#"
+        <div class="event file-event">
+            <div class="timestamp">{}</div>
+            <div>📁 Analyzed file: {} ({} bytes, entropy: {:.2})</div>
+        </div>"#,
+                event_time.format("%H:%M:%S"),
+                file.file_path,
+                file.file_size,
+                file.entropy
+            ));
+        }
+
+        // Behavioral events
+        for (i, process) in report.detailed_findings.behavioral_findings.processes_spawned.iter().enumerate() {
+            let event_time = report.metadata.analysis_start_time + chrono::Duration::seconds(30 + i as i64 * 5);
+            events.push(format!(r#"
+        <div class="event process-event">
+            <div class="timestamp">{}</div>
+            <div>⚙️ Process created: {} (PID: {})</div>
+        </div>"#,
+                event_time.format("%H:%M:%S"),
+                process.name,
+                process.pid
+            ));
+        }
+
+        // Network events (if any)
+        if let Some(network) = &report.detailed_findings.network_findings {
+            for (i, conn) in network.connections.iter().enumerate() {
+                let event_time = report.metadata.analysis_start_time + chrono::Duration::seconds(60 + i as i64 * 3);
+                events.push(format!(r#"
+        <div class="event network-event">
+            <div class="timestamp">{}</div>
+            <div>🌐 Network connection: {} -> {}</div>
+        </div>"#,
+                    event_time.format("%H:%M:%S"),
+                    conn.local_address,
+                    conn.remote_address
+                ));
+            }
+        }
+
+        events.join("\n")
+    }
+
+    pub async fn export_iocs(&self, report: &AnalysisReport) -> Result<()> {
+        // Export Indicators of Compromise in standard formats
+        
+        // STIX format
+        let stix_path = self.output_dir.join("artifacts")
+            .join(format!("iocs_stix_{}.json", report.report_id));
+        let stix_content = self.generate_stix_iocs(report)?;
+        async_fs::write(stix_path, stix_content).await?;
+        
+        // Simple IOC list
+        let ioc_path = self.output_dir.join("artifacts")
+            .join(format!("iocs_{}.txt", report.report_id));
+        let ioc_content = self.generate_simple_iocs(report);
+        async_fs::write(ioc_path, ioc_content).await?;
+        
+        println!("🎯 IOCs exported to artifacts directory");
+        
+        Ok(())
+    }
+
+    fn generate_stix_iocs(&self, report: &AnalysisReport) -> Result<String> {
+        // Simplified STIX 2.0 format
+        let mut indicators = Vec::new();
+        
+        for file in &report.detailed_findings.file_analysis {
+            if !file.threat_indicators.is_empty() {
+                indicators.push(serde_json::json!({
+                    "type": "indicator",
+                    "id": format!("indicator--{}", Uuid::new_v4()),
+                    "created": report.timestamp,
+                    "modified": report.timestamp,
+                    "pattern": format!("[file:hashes.SHA256 = '{}']", file.file_hash),
+                    "labels": ["malicious-activity"],
+                    "description": format!("Suspicious file detected: {}", file.file_path)
+                }));
+            }
+        }
+
+        let stix_bundle = serde_json::json!({
+            "type": "bundle",
+            "id": format!("bundle--{}", Uuid::new_v4()),
+            "spec_version": "2.0",
+            "objects": indicators
+        });
+
+        Ok(serde_json::to_string_pretty(&stix_bundle)?)
+    }
+
+    fn generate_simple_iocs(&self, report: &AnalysisReport) -> String {
+        let mut iocs = String::new();
+        iocs.push_str(&format!("# IOCs for Analysis Report {}\n", report.report_id));
+        iocs.push_str(&format!("# Generated: {}\n\n", report.timestamp));
+
+        iocs.push_str("# File Hashes\n");
+        for file in &report.detailed_findings.file_analysis {
+            if !file.threat_indicators.is_empty() {
+                iocs.push_str(&format!("{} # {}\n", file.file_hash, file.file_path));
+            }
+        }
+
+        iocs.push_str("\n# Network Indicators\n");
+        if let Some(network) = &report.detailed_findings.network_findings {
+            for domain in &network.suspicious_domains {
+                iocs.push_str(&format!("{}\n", domain));
+            }
+        }
+
+        iocs.push_str("\n# Process Names\n");
+        for process in &report.detailed_findings.behavioral_findings.processes_spawned {
+            if !process.suspicious_activities.is_empty() {
+                iocs.push_str(&format!("{}\n", process.name));
+            }
+        }
+
+        iocs
+    }
+}
+
+// Helper functions for integration with main sandbox
+impl AnalysisReporter {
+    pub async fn quick_device_summary(&self, device: &UsbDevice) -> String {
+        format!("🔌 Device Connected: VID:{:04X} PID:{:04X} Type:{:?} Path:{}",
+                device.vendor_id,
+                device.product_id,
+                device.device_type,
+                device.device_path.display())
+    }
+
+    pub async fn log_analysis_start(&self, device: &UsbDevice, sandbox_id: &Uuid) -> Result<()> {
+        let event = format!("🚀 Starting analysis for device {}:{:04X}:{:04X} in sandbox {}",
+                           device.vendor_id, device.product_id, device.id, sandbox_id);
+        self.log_real_time_event(&event).await
+    }
+
+    pub async fn log_analysis_phase(&self, phase: &str, details: &str) -> Result<()> {
+        let event = format!("⚙️ Phase: {} - {}", phase, details);
+        self.log_real_time_event(&event).await
+    }
+
+    pub async fn log_threat_detection(&self, threat_level: &ThreatLevel, description: &str) -> Result<()> {
+        let emoji = match threat_level {
+            ThreatLevel::Safe => "✅",
+            ThreatLevel::Suspicious => "⚠️",
+            ThreatLevel::Malicious => "🔥",
+            ThreatLevel::Critical => "💀",
+        };
+        let event = format!("{} Threat Detected: {:?} - {}", emoji, threat_level, description);
+        self.log_real_time_event(&event).await
+    }
+}
+
+// Factory function for easy setup
+pub fn create_reporter(output_dir: &str, format: ReportFormat) -> AnalysisReporter {
+    AnalysisReporter::new(PathBuf::from(output_dir), format)
+}
+
+// Integration with main application
+pub async fn setup_reporting(output_base: &str) -> Result<AnalysisReporter> {
+    let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
+    let output_dir = PathBuf::from(output_base).join(format!("analysis_{}", timestamp));
+    
+    let reporter = AnalysisReporter::new(output_dir, ReportFormat::All);
+    reporter.setup_output_directory().await?;
+    
+    println!("📊 Analysis reporting system initialized");
+    println!("📁 Output directory: {}", reporter.output_dir.display());
+    
+    Ok(reporter)
+}

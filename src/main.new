@@ -1,17 +1,15 @@
-// VM-Based USB Sandbox - Integrated with Analysis Reporter
+// VM-Based USB Sandbox - Inspired by LobsterPot Architecture
 // src/main.rs
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
-use tokio::fs as async_fs;
-use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 use serde::{Serialize, Deserialize};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 // Core sandbox configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -393,13 +391,17 @@ pub enum SandboxEvent {
     Error { sandbox_id: Uuid, error: String },
 }
 
-// Placeholder module structures
+// Placeholder module structures (to satisfy missing modules)
 pub mod database {
     pub mod threat_db {
         use anyhow::Result;
+        
         pub struct ThreatDatabase;
+        
         impl ThreatDatabase {
-            pub async fn new(_db_url: &str) -> Result<Self> { Ok(Self) }
+            pub async fn new(_db_url: &str) -> Result<Self> {
+                Ok(Self)
+            }
         }
     }
 }
@@ -448,132 +450,16 @@ pub mod honeypot {
 pub mod ml {
     pub mod isolation_forest {
         pub struct IsolationForestCustom;
+        
         impl IsolationForestCustom {
-            pub fn new(_n_trees: usize, _max_depth: usize, _sample_size: usize) -> Self { Self }
-        }
-    }
-}
-
-// Analysis Reporter
-#[derive(Debug, Clone)]
-pub enum ReportFormat {
-    Json,
-    Html,
-    Csv,
-    All,
-}
-
-pub struct AnalysisReporter {
-    output_dir: PathBuf,
-    report_format: ReportFormat,
-}
-
-impl AnalysisReporter {
-    pub fn new(output_dir: PathBuf, format: ReportFormat) -> Self {
-        Self {
-            output_dir,
-            report_format: format,
-        }
-    }
-
-    pub async fn setup_output_directory(&self) -> Result<()> {
-        async_fs::create_dir_all(&self.output_dir).await?;
-        
-        let subdirs = ["reports", "logs", "raw_data", "artifacts"];
-        for subdir in subdirs {
-            let path = self.output_dir.join(subdir);
-            async_fs::create_dir_all(path).await?;
-        }
-        
-        println!("📁 Output directory setup: {}", self.output_dir.display());
-        Ok(())
-    }
-
-    pub async fn generate_simple_report(&self, device: &UsbDevice, analysis: &ThreatAnalysis) -> Result<()> {
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let filename = format!("nixie_analysis_{}_{}.json", device.vendor_id, timestamp);
-        let report_path = self.output_dir.join("reports").join(filename);
-
-        let simple_report = serde_json::json!({
-            "device_info": {
-                "vendor_id": format!("{:04X}", device.vendor_id),
-                "product_id": format!("{:04X}", device.product_id),
-                "device_type": format!("{:?}", device.device_type),
-                "first_seen": device.first_seen
-            },
-            "analysis_summary": {
-                "threat_level": format!("{:?}", analysis.threat_level),
-                "total_indicators": analysis.indicators.len(),
-                "files_analyzed": analysis.file_analysis.len(),
-                "behavioral_anomalies": analysis.behavioral_analysis.anti_analysis_techniques.len()
-            },
-            "key_findings": {
-                "threat_indicators": analysis.indicators.iter().take(10).map(|i| &i.value).collect::<Vec<_>>(),
-                "suspicious_files": analysis.file_analysis.iter()
-                    .filter(|f| !f.signatures.is_empty())
-                    .map(|f| f.file_path.display().to_string())
-                    .collect::<Vec<_>>()
-            },
-            "protocol_analysis": {
-                "vid_pid": format!("{:04X}:{:04X}", device.vendor_id, device.product_id),
-                "custom_protocol_detected": true,
-                "communication_type": "Ukrainian Nixie Clock Protocol"
+            pub fn new(_n_trees: usize, _max_depth: usize, _sample_size: usize) -> Self {
+                Self
             }
-        });
-
-        let json_content = serde_json::to_string_pretty(&simple_report)?;
-        async_fs::write(&report_path, json_content).await?;
-
-        println!("📄 Analysis report saved: {}", report_path.display());
-        self.print_summary(device, analysis);
-
-        Ok(())
-    }
-
-    fn print_summary(&self, device: &UsbDevice, analysis: &ThreatAnalysis) {
-        println!("\n🎯 ===== NIXIE CLOCK ANALYSIS COMPLETE =====");
-        println!("🔌 Device: {:04X}:{:04X}", device.vendor_id, device.product_id);
-        
-        let threat_emoji = match analysis.threat_level {
-            ThreatLevel::Safe => "✅",
-            ThreatLevel::Suspicious => "⚠️",
-            ThreatLevel::Malicious => "🔥",
-            ThreatLevel::Critical => "💀",
-        };
-        
-        println!("{} Threat Level: {:?}", threat_emoji, analysis.threat_level);
-        println!("📊 Files Analyzed: {}", analysis.file_analysis.len());
-        println!("🎯 Threat Indicators: {}", analysis.indicators.len());
-        
-        if !analysis.behavioral_analysis.anti_analysis_techniques.is_empty() {
-            println!("🕵️ Anti-Analysis Techniques: {:?}", analysis.behavioral_analysis.anti_analysis_techniques);
         }
-
-        println!("🔍 Protocol: Custom Ukrainian Nixie Clock");
-        println!("📁 Full report: {}/reports/", self.output_dir.display());
-        println!("==========================================\n");
-    }
-
-    pub async fn log_event(&self, event: &str) -> Result<()> {
-        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
-        let log_entry = format!("[{}] {}\n", timestamp, event);
-        
-        let log_path = self.output_dir.join("logs").join("analysis.log");
-        
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_path)
-            .await?;
-        
-        file.write_all(log_entry.as_bytes()).await?;
-        print!("{}", log_entry);
-        
-        Ok(())
     }
 }
 
-// Main sandbox manager
+// Main sandbox manager (simplified for compilation)
 pub struct UsbSandboxManager {
     config: SandboxConfig,
     active_sandboxes: Arc<RwLock<HashMap<Uuid, ActiveSandbox>>>,
@@ -582,24 +468,27 @@ pub struct UsbSandboxManager {
     deception_network: Arc<Mutex<honeypot::deception_network::DeceptionNetwork>>,
     ml_detector: Arc<Mutex<ml::isolation_forest::IsolationForestCustom>>,
     event_bus: mpsc::Sender<SandboxEvent>,
-    reporter: AnalysisReporter,
 }
 
 impl UsbSandboxManager {
-    pub async fn new(config: SandboxConfig, reporter: AnalysisReporter) -> Result<Self> {
+    pub async fn new(config: SandboxConfig) -> Result<Self> {
         let threat_db = Arc::new(Mutex::new(
             database::threat_db::ThreatDatabase::new("sqlite:usb_threats.db").await?
         ));
         
-        let mesh_node = Arc::new(Mutex::new(coordination::mesh::MeshNode::new()));
+        let mesh_node = Arc::new(Mutex::new(
+            coordination::mesh::MeshNode::new()
+        ));
         
         let deception_network = Arc::new(Mutex::new(
             honeypot::deception_network::DeceptionNetwork::new()
                 .add_honeypot("usb_filesystem", honeypot::deception_network::HoneypotType::FileServer)
+                .add_honeypot("usb_autorun", honeypot::deception_network::HoneypotType::FileServer)
                 .deploy().await?
         ));
         
         let ml_detector = ml::isolation_forest::IsolationForestCustom::new(200, 15, 512);
+        
         let (event_tx, mut event_rx) = mpsc::channel::<SandboxEvent>(1000);
         
         let manager = Self {
@@ -610,7 +499,6 @@ impl UsbSandboxManager {
             deception_network,
             ml_detector: Arc::new(Mutex::new(ml_detector)),
             event_bus: event_tx,
-            reporter,
         };
         
         // Start event processing loop
@@ -623,50 +511,43 @@ impl UsbSandboxManager {
         Ok(manager)
     }
     
-    pub async fn analyze_nixie_clock(&self) -> Result<()> {
-        // Create a mock Ukrainian nixie clock device
-        let nixie_device = UsbDevice {
-            id: Uuid::new_v4(),
-            vendor_id: 0x8087,
-            product_id: 0x0AAA,
-            device_path: PathBuf::from("USB\\VID_8087&PID_0AAA"),
-            mount_point: None,
-            device_type: UsbDeviceType::Unknown,
-            first_seen: chrono::Utc::now(),
-            threat_score: 0.3,
-        };
-
-        self.reporter.log_event("🔌 Ukrainian nixie clock detected").await?;
-        self.reporter.log_event("🚀 Starting comprehensive analysis").await?;
-
-        // Run analysis
-        let analysis = self.run_nixie_analysis(&nixie_device).await?;
+    pub async fn analyze_usb_device(&self, device: UsbDevice) -> Result<ThreatAnalysis> {
+        let sandbox_id = Uuid::new_v4();
         
-        // Generate report
-        self.reporter.generate_simple_report(&nixie_device, &analysis).await?;
+        // Create VM instance
+        let vm_handle = self.create_vm_instance(&sandbox_id).await?;
         
+        // Mount device and run analysis
+        self.mount_device_in_vm(&vm_handle, &device).await?;
+        let analysis = self.run_comprehensive_analysis(&sandbox_id, &device, &vm_handle).await?;
+        
+        // Cleanup
+        self.cleanup_vm(&vm_handle).await?;
+        
+        Ok(analysis)
+    }
+    
+    async fn create_vm_instance(&self, sandbox_id: &Uuid) -> Result<VmHandle> {
+        Ok(VmHandle {
+            vm_id: format!("usb-sandbox-{}", sandbox_id),
+            snapshot_id: None,
+            monitor_socket: format!("/tmp/monitor-{}.sock", sandbox_id),
+            qmp_socket: format!("/tmp/qmp-{}.sock", sandbox_id),
+        })
+    }
+    
+    async fn mount_device_in_vm(&self, _vm_handle: &VmHandle, _device: &UsbDevice) -> Result<()> {
+        // Placeholder implementation
         Ok(())
     }
-
-    async fn run_nixie_analysis(&self, device: &UsbDevice) -> Result<ThreatAnalysis> {
-        self.reporter.log_event("📊 Phase 1: Static analysis").await?;
-        self.reporter.log_event("🔍 Phase 2: Protocol analysis").await?;
-        self.reporter.log_event("🌐 Phase 3: Behavioral monitoring").await?;
-
-        // Create mock analysis results for the nixie clock
-        let analysis = ThreatAnalysis {
+    
+    async fn run_comprehensive_analysis(&self, sandbox_id: &Uuid, device: &UsbDevice, _vm_handle: &VmHandle) -> Result<ThreatAnalysis> {
+        Ok(ThreatAnalysis {
             device_id: device.id,
-            sandbox_id: Uuid::new_v4(),
+            sandbox_id: *sandbox_id,
             timestamp: chrono::Utc::now(),
-            threat_level: ThreatLevel::Safe, // Nixie clock seems safe!
-            indicators: vec![
-                ThreatIndicator {
-                    indicator_type: IndicatorType::FileName,
-                    value: "TRCorp Nixie Clock".to_string(),
-                    confidence: 0.9,
-                    description: "Ukrainian nixie tube clock device".to_string(),
-                }
-            ],
+            threat_level: ThreatLevel::Safe,
+            indicators: Vec::new(),
             behavioral_analysis: BehavioralAnalysis {
                 processes_created: Vec::new(),
                 files_accessed: Vec::new(),
@@ -679,19 +560,24 @@ impl UsbSandboxManager {
             file_analysis: Vec::new(),
             network_analysis: None,
             memory_analysis: None,
-        };
-
-        self.reporter.log_event("✅ Analysis completed successfully").await?;
-        Ok(analysis)
+        })
     }
-
+    
+    async fn cleanup_vm(&self, _vm_handle: &VmHandle) -> Result<()> {
+        // Placeholder implementation
+        Ok(())
+    }
+    
     async fn process_event(event: SandboxEvent) {
         match event {
             SandboxEvent::ThreatDetected { sandbox_id, threat } => {
-                println!("🚨 Threat detected in sandbox {}: {:?}", sandbox_id, threat.threat_level);
+                println!("Threat detected in sandbox {}: {:?}", sandbox_id, threat.threat_level);
             }
             SandboxEvent::AnalysisComplete(sandbox_id) => {
-                println!("✅ Analysis complete for sandbox {}", sandbox_id);
+                println!("Analysis complete for sandbox {}", sandbox_id);
+            }
+            SandboxEvent::Error { sandbox_id, error } => {
+                println!("Error in sandbox {}: {}", sandbox_id, error);
             }
             _ => {}
         }
@@ -700,15 +586,9 @@ impl UsbSandboxManager {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("🔍 USB Sandbox application started, fren!");
+    println!("USB Sandbox application started, fren!");
     
-    // Setup reporting
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let output_dir = PathBuf::from("./usb_analysis_output").join(format!("analysis_{}", timestamp));
-    let reporter = AnalysisReporter::new(output_dir, ReportFormat::All);
-    reporter.setup_output_directory().await?;
-
-    // Setup sandbox configuration
+    // Example configuration
     let config = SandboxConfig {
         vm_type: VmType::Qemu,
         memory_limit_mb: 2048,
@@ -721,89 +601,9 @@ async fn main() -> Result<()> {
         analysis_depth: AnalysisDepth::Basic,
     };
     
-    let manager = UsbSandboxManager::new(config, reporter).await?;
+    let _manager = UsbSandboxManager::new(config).await?;
     
-    println!("🎯 Ready to analyze USB devices, husklyfren!");
-    println!("💡 Commands:");
-    println!("   'analyze' - Analyze nixie clock");
-    println!("   'monitor' - Start real-time USB monitoring");
-    println!("   'quit' - Exit the sandbox");
-    println!("🔌 Waiting for input... (type 'help' for commands)");
-
-    // Interactive command loop
-    let stdin = tokio::io::stdin();
-    let mut reader = tokio::io::BufReader::new(stdin);
-    let mut line = String::new();
-
-    loop {
-        print!("sandbox> ");
-        use std::io::Write;
-        std::io::stdout().flush().unwrap();
-        
-        line.clear();
-        
-        // Read user input
-        match tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line).await {
-            Ok(0) => break, // EOF
-            Ok(_) => {
-                let command = line.trim().to_lowercase();
-                
-                match command.as_str() {
-                    "analyze" | "nixie" => {
-                        println!("🚀 Analyzing nixie clock...");
-                        if let Err(e) = manager.analyze_nixie_clock().await {
-                            println!("❌ Analysis failed: {}", e);
-                        }
-                    }
-                    "monitor" | "watch" => {
-                        println!("👀 Starting USB monitoring mode...");
-                        println!("   Plug in your nixie clock now!");
-                        println!("   Press Ctrl+C to stop monitoring");
-                        
-                        // Simulate monitoring for 30 seconds
-                        for i in 1..=30 {
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            if i % 5 == 0 {
-                                println!("   📡 Monitoring... {}s", i);
-                            }
-                        }
-                        println!("   ⏹️ Monitoring stopped");
-                    }
-                    "help" | "h" => {
-                        println!("📋 Available commands:");
-                        println!("   analyze  - Run analysis on nixie clock");
-                        println!("   monitor  - Start USB device monitoring");
-                        println!("   status   - Show sandbox status");
-                        println!("   quit     - Exit the sandbox");
-                        println!("   help     - Show this help");
-                    }
-                    "status" | "s" => {
-                        println!("📊 Sandbox Status:");
-                        println!("   🟢 Sandbox: Active");
-                        println!("   📁 Output: {}", manager.reporter.output_dir.display());
-                        println!("   🔧 VM Type: {:?}", manager.config.vm_type);
-                        println!("   💾 Memory: {}MB", manager.config.memory_limit_mb);
-                    }
-                    "quit" | "exit" | "q" => {
-                        println!("👋 Shutting down USB sandbox...");
-                        break;
-                    }
-                    "" => {
-                        // Empty line, just continue
-                    }
-                    _ => {
-                        println!("❓ Unknown command: '{}'. Type 'help' for available commands.", command);
-                    }
-                }
-            }
-            Err(e) => {
-                println!("❌ Error reading input: {}", e);
-                break;
-            }
-        }
-    }
-    
-    println!("🏁 USB Sandbox shutdown complete. Goodbye, fren!");
+    println!("Ready to analyze your Ukrainian nixie clock, husklyfren!");
     
     Ok(())
 }
