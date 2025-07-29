@@ -13,9 +13,6 @@ use uuid::Uuid;
 use serde::{Serialize, Deserialize};
 use anyhow::Result;
 
-// Module declarations
-mod real_usb_analyzer;
-
 // Core sandbox configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxConfig {
@@ -753,9 +750,9 @@ async fn main() -> Result<()> {
                 
                 match command.as_str() {
                     "analyze" | "nixie" => {
-                        println!("🚀 Running REAL analysis on nixie clock...");
-                        if let Err(e) = real_usb_analyzer::run_real_usb_analysis().await {
-                            println!("❌ Real analysis failed: {}", e);
+                        println!("🚀 Analyzing nixie clock...");
+                        if let Err(e) = manager.analyze_nixie_clock().await {
+                            println!("❌ Analysis failed: {}", e);
                         }
                     }
                     "monitor" | "watch" => {
@@ -773,9 +770,10 @@ async fn main() -> Result<()> {
                         println!("   ⏹️ Monitoring stopped");
                     }
                     "protocol" | "deep" => {
-                        println!("🔬 Starting REAL USB protocol analysis...");
-                        if let Err(e) = crate::real_usb_analyzer::run_real_usb_analysis().await {
-                            println!("❌ Real analysis failed: {}", e);
+                        println!("🔬 Starting DEEP protocol analysis...");
+                        println!("   This will capture and analyze ALL communication!");
+                        if let Err(e) = crate::protocol_analyzer::analyze_nixie_protocol().await {
+                            println!("❌ Protocol analysis failed: {}", e);
                         }
                     }
                     "packets" | "capture" => {
@@ -793,21 +791,14 @@ async fn main() -> Result<()> {
                     }
                     "help" | "h" => {
                         println!("📋 Available commands:");
-                        println!("   analyze   - REAL analysis of connected nixie clock");
-                        println!("   monitor   - Monitor for device plug/unplug events");
-                        println!("   protocol  - Deep protocol reverse engineering");
-                        println!("   capture   - Live USB traffic capture (60s)");
-                        println!("   scan      - Scan for all USB devices");
+                        println!("   analyze   - Run analysis on nixie clock");
+                        println!("   monitor   - Start USB device monitoring");
+                        println!("   protocol  - DEEP protocol analysis & reverse engineering");
+                        println!("   packets   - Raw packet capture mode");
+                        println!("   decode    - Decode captured packets");
                         println!("   status    - Show sandbox status");
                         println!("   quit      - Exit the sandbox");
                         println!("   help      - Show this help");
-                    }
-                    "scan" | "devices" => {
-                        println!("🔍 Scanning for USB devices...");
-                        let analyzer = real_usb_analyzer::RealUsbAnalyzer::new("8087", "0AAA");
-                        if let Err(e) = analyzer.scan_usb_devices().await {
-                            println!("❌ USB scan failed: {}", e);
-                        }
                     }
                     "status" | "s" => {
                         println!("📊 Sandbox Status:");

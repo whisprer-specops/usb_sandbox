@@ -13,9 +13,6 @@ use uuid::Uuid;
 use serde::{Serialize, Deserialize};
 use anyhow::Result;
 
-// Module declarations
-mod real_usb_analyzer;
-
 // Core sandbox configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxConfig {
@@ -733,6 +730,13 @@ async fn main() -> Result<()> {
     println!("   'quit' - Exit the sandbox");
     println!("🔌 Waiting for input... (type 'help' for commands)");
 
+    "protocol" | "analyze-protocol" => {
+        println!("🔬 Starting deep protocol analysis...");
+        if let Err(e) = analyze_nixie_protocol().await {
+            println!("❌ Protocol analysis failed: {}", e);
+        }
+    }
+
     // Interactive command loop
     let stdin = tokio::io::stdin();
     let mut reader = tokio::io::BufReader::new(stdin);
@@ -753,9 +757,9 @@ async fn main() -> Result<()> {
                 
                 match command.as_str() {
                     "analyze" | "nixie" => {
-                        println!("🚀 Running REAL analysis on nixie clock...");
-                        if let Err(e) = real_usb_analyzer::run_real_usb_analysis().await {
-                            println!("❌ Real analysis failed: {}", e);
+                        println!("🚀 Analyzing nixie clock...");
+                        if let Err(e) = manager.analyze_nixie_clock().await {
+                            println!("❌ Analysis failed: {}", e);
                         }
                     }
                     "monitor" | "watch" => {
@@ -772,42 +776,13 @@ async fn main() -> Result<()> {
                         }
                         println!("   ⏹️ Monitoring stopped");
                     }
-                    "protocol" | "deep" => {
-                        println!("🔬 Starting REAL USB protocol analysis...");
-                        if let Err(e) = crate::real_usb_analyzer::run_real_usb_analysis().await {
-                            println!("❌ Real analysis failed: {}", e);
-                        }
-                    }
-                    "packets" | "capture" => {
-                        println!("📦 Starting raw packet capture...");
-                        println!("   Capturing USB traffic for 15 seconds...");
-                        
-                        // This would integrate with real USB capture
-                        for i in 1..=15 {
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            if i % 3 == 0 {
-                                println!("   📡 Captured {} packets so far...", i * 3);
-                            }
-                        }
-                        println!("   📄 Packet capture saved to raw_data/");
-                    }
                     "help" | "h" => {
                         println!("📋 Available commands:");
-                        println!("   analyze   - REAL analysis of connected nixie clock");
-                        println!("   monitor   - Monitor for device plug/unplug events");
-                        println!("   protocol  - Deep protocol reverse engineering");
-                        println!("   capture   - Live USB traffic capture (60s)");
-                        println!("   scan      - Scan for all USB devices");
-                        println!("   status    - Show sandbox status");
-                        println!("   quit      - Exit the sandbox");
-                        println!("   help      - Show this help");
-                    }
-                    "scan" | "devices" => {
-                        println!("🔍 Scanning for USB devices...");
-                        let analyzer = real_usb_analyzer::RealUsbAnalyzer::new("8087", "0AAA");
-                        if let Err(e) = analyzer.scan_usb_devices().await {
-                            println!("❌ USB scan failed: {}", e);
-                        }
+                        println!("   analyze  - Run analysis on nixie clock");
+                        println!("   monitor  - Start USB device monitoring");
+                        println!("   status   - Show sandbox status");
+                        println!("   quit     - Exit the sandbox");
+                        println!("   help     - Show this help");
                     }
                     "status" | "s" => {
                         println!("📊 Sandbox Status:");
