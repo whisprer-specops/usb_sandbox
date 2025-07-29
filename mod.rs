@@ -1,0 +1,1501 @@
+// VM-Based USB Sandbox - Inspired by LobsterPot Architecture
+// src/usb_sandbox/mod.rs
+
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, RwLock};
+use uuid::Uuid;
+use serde::{Serialize, Deserialize};
+use anyhow::{Result, anyhow};
+
+// Core sandbox configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    pub vm_type: VmType,
+    pub memory_limit_mb: u32,
+    pub cpu_cores: u8,
+    pub disk_size_mb: u32,
+    pub network_isolation: NetworkIsolation,
+    pub filesystem_isolation: FilesystemIsolation,
+    pub timeout_seconds: u64,
+    pub snapshot_enabled: bool,
+    pub analysis_depth: AnalysisDepth,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VmType {
+    Qemu,
+    VirtualBox,
+    VMware,
+    Hyper_V,
+    Xen,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NetworkIsolation {
+    Complete,       // No network access
+    Honeypot,      // Redirect to deception network
+    Monitored,     // All traffic logged and analyzed
+    Limited,       // Only specific allowed destinations
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FilesystemIsolation {
+    ReadOnly,      // Mount USB as read-only
+    CopyOnWrite,   // COW filesystem for modifications
+    Sandbox,       // Isolated temporary filesystem
+    Memory,        // RAM-only filesystem
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AnalysisDepth {
+    Basic,         // File metadata and signatures
+    Behavioral,    // Process monitoring and API calls
+    Deep,          // Memory analysis and code injection detection
+    Forensic,      // Full system state capture
+}
+
+// USB device representation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsbDevice {
+    pub id: Uuid,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub device_path: PathBuf,
+    pub mount_point: Option<PathBuf>,
+    pub device_type: UsbDeviceType,
+    pub first_seen: Instant,
+    pub threat_score: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UsbDeviceType {
+    MassStorage,
+    HumanInterface,  // Keyboard/Mouse
+    Audio,
+    Video,
+    Network,
+    Unknown,
+}
+
+// Threat analysis results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreatAnalysis {
+    pub device_id: Uuid,
+    pub sandbox_id: Uuid,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub threat_level: ThreatLevel,
+    pub indicators: Vec<ThreatIndicator>,
+    pub behavioral_analysis: BehavioralAnalysis,
+    pub file_analysis: Vec<FileAnalysis>,
+    pub network_analysis: Option<NetworkAnalysis>,
+    pub memory_analysis: Option<MemoryAnalysis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ThreatLevel {
+    Safe,
+    Suspicious,
+    Malicious,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreatIndicator {
+    pub indicator_type: IndicatorType,
+    pub value: String,
+    pub confidence: f32,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IndicatorType {
+    FileHash,
+    FileName,
+    ProcessName,
+    NetworkConnection,
+    RegistryKey,
+    ApiCall,
+    MemorySignature,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BehavioralAnalysis {
+    pub processes_created: Vec<ProcessInfo>,
+    pub files_accessed: Vec<FileAccess>,
+    pub network_connections: Vec<NetworkConnection>,
+    pub registry_modifications: Vec<RegistryModification>,
+    pub api_calls: Vec<ApiCall>,
+    pub privilege_escalation_attempts: u32,
+    pub anti_analysis_techniques: Vec<AntiAnalysisTechnique>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub command_line: String,
+    pub parent_pid: u32,
+    pub creation_time: chrono::DateTime<chrono::Utc>,
+    pub memory_usage: u64,
+    pub cpu_usage: f32,
+    pub dll_loads: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileAccess {
+    pub path: PathBuf,
+    pub operation: FileOperation,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub process_id: u32,
+    pub bytes_transferred: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FileOperation {
+    Read,
+    Write,
+    Delete,
+    Create,
+    Execute,
+    Modify,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkConnection {
+    pub source_ip: IpAddr,
+    pub dest_ip: IpAddr,
+    pub source_port: u16,
+    pub dest_port: u16,
+    pub protocol: String,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryModification {
+    pub key_path: String,
+    pub value_name: Option<String>,
+    pub operation: RegistryOperation,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RegistryOperation {
+    Create,
+    Read,
+    Write,
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiCall {
+    pub function_name: String,
+    pub module_name: String,
+    pub parameters: Vec<String>,
+    pub return_value: Option<String>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub process_id: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AntiAnalysisTechnique {
+    VmDetection,
+    DebuggerDetection,
+    SandboxEvasion,
+    TimeBasedEvasion,
+    EnvironmentChecks,
+    PackerDetection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileAnalysis {
+    pub file_path: PathBuf,
+    pub file_hash: String,
+    pub file_size: u64,
+    pub file_type: String,
+    pub entropy: f64,
+    pub signatures: Vec<String>,
+    pub static_analysis: StaticAnalysis,
+    pub dynamic_analysis: Option<DynamicAnalysis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaticAnalysis {
+    pub pe_analysis: Option<PeAnalysis>,
+    pub strings: Vec<String>,
+    pub imports: Vec<String>,
+    pub exports: Vec<String>,
+    pub sections: Vec<SectionInfo>,
+    pub certificates: Vec<CertificateInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeAnalysis {
+    pub compile_time: chrono::DateTime<chrono::Utc>,
+    pub entry_point: u64,
+    pub image_base: u64,
+    pub subsystem: String,
+    pub dll_characteristics: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionInfo {
+    pub name: String,
+    pub virtual_address: u64,
+    pub virtual_size: u64,
+    pub raw_size: u64,
+    pub characteristics: Vec<String>,
+    pub entropy: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertificateInfo {
+    pub subject: String,
+    pub issuer: String,
+    pub serial_number: String,
+    pub valid_from: chrono::DateTime<chrono::Utc>,
+    pub valid_to: chrono::DateTime<chrono::Utc>,
+    pub is_trusted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicAnalysis {
+    pub execution_time: Duration,
+    pub code_injection_detected: bool,
+    pub shellcode_patterns: Vec<String>,
+    pub encryption_detected: bool,
+    pub packing_detected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkAnalysis {
+    pub total_connections: u32,
+    pub unique_destinations: u32,
+    pub protocol_distribution: HashMap<String, u32>,
+    pub suspicious_domains: Vec<String>,
+    pub data_exfiltration_detected: bool,
+    pub c2_communication_detected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryAnalysis {
+    pub heap_analysis: HeapAnalysis,
+    pub stack_analysis: StackAnalysis,
+    pub injection_artifacts: Vec<InjectionArtifact>,
+    pub yara_matches: Vec<YaraMatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeapAnalysis {
+    pub heap_size: u64,
+    pub allocated_chunks: u32,
+    pub free_chunks: u32,
+    pub suspicious_allocations: Vec<SuspiciousAllocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackAnalysis {
+    pub stack_size: u64,
+    pub return_address_overwrites: u32,
+    pub rop_gadgets_found: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuspiciousAllocation {
+    pub address: u64,
+    pub size: u64,
+    pub permissions: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InjectionArtifact {
+    pub injection_type: InjectionType,
+    pub source_process: u32,
+    pub target_process: u32,
+    pub injected_address: u64,
+    pub injected_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InjectionType {
+    DllInjection,
+    ProcessHollowing,
+    ReflectiveDllLoading,
+    ManualDllLoading,
+    AtomBombing,
+    ThreadExecution,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YaraMatch {
+    pub rule_name: String,
+    pub rule_family: String,
+    pub matched_strings: Vec<String>,
+    pub confidence: f32,
+}
+
+// Main sandbox manager
+pub struct UsbSandboxManager {
+    config: SandboxConfig,
+    active_sandboxes: Arc<RwLock<HashMap<Uuid, ActiveSandbox>>>,
+    threat_db: Arc<Mutex<crate::database::threat_db::ThreatDatabase>>,
+    mesh_node: Arc<Mutex<crate::coordination::mesh::MeshNode>>,
+    deception_network: Arc<Mutex<crate::honeypot::deception_network::DeceptionNetwork>>,
+    ml_detector: Arc<Mutex<crate::ml::isolation_forest::IsolationForestCustom>>,
+    event_bus: mpsc::Sender<SandboxEvent>,
+}
+
+#[derive(Debug)]
+pub struct ActiveSandbox {
+    pub id: Uuid,
+    pub device: UsbDevice,
+    pub vm_handle: VmHandle,
+    pub start_time: Instant,
+    pub status: SandboxStatus,
+    pub analysis_progress: AnalysisProgress,
+}
+
+#[derive(Debug)]
+pub enum SandboxStatus {
+    Initializing,
+    Running,
+    Analyzing,
+    Complete,
+    Failed(String),
+    Terminated,
+}
+
+#[derive(Debug)]
+pub struct AnalysisProgress {
+    pub static_analysis_complete: bool,
+    pub dynamic_analysis_complete: bool,
+    pub behavioral_analysis_complete: bool,
+    pub network_analysis_complete: bool,
+    pub memory_analysis_complete: bool,
+    pub overall_progress: f32,
+}
+
+#[derive(Debug)]
+pub struct VmHandle {
+    pub vm_id: String,
+    pub snapshot_id: Option<String>,
+    pub monitor_socket: String,
+    pub qmp_socket: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum SandboxEvent {
+    DeviceConnected(UsbDevice),
+    SandboxStarted(Uuid),
+    ThreatDetected { sandbox_id: Uuid, threat: ThreatAnalysis },
+    AnalysisComplete(Uuid),
+    SandboxTerminated(Uuid),
+    Error { sandbox_id: Uuid, error: String },
+}
+
+impl UsbSandboxManager {
+    pub async fn new(config: SandboxConfig) -> Result<Self> {
+        let threat_db = Arc::new(Mutex::new(
+            crate::database::threat_db::ThreatDatabase::new("sqlite:usb_threats.db").await?
+        ));
+        
+        let mesh_node = Arc::new(Mutex::new(
+            crate::coordination::mesh::MeshNode::new()
+        ));
+        
+        let deception_network = Arc::new(Mutex::new(
+            crate::honeypot::deception_network::DeceptionNetwork::new()
+                .add_honeypot("usb_filesystem", crate::honeypot::deception_network::HoneypotType::FileServer)
+                .add_honeypot("usb_autorun", crate::honeypot::deception_network::HoneypotType::FileServer)
+                .deploy().await?
+        ));
+        
+        // Initialize ML detector with USB-specific features
+        let mut ml_detector = crate::ml::isolation_forest::IsolationForestCustom::new(200, 15, 512);
+        
+        let (event_tx, mut event_rx) = mpsc::channel::<SandboxEvent>(1000);
+        
+        let manager = Self {
+            config,
+            active_sandboxes: Arc::new(RwLock::new(HashMap::new())),
+            threat_db,
+            mesh_node,
+            deception_network,
+            ml_detector: Arc::new(Mutex::new(ml_detector)),
+            event_bus: event_tx,
+        };
+        
+        // Start event processing loop
+        tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                Self::process_event(event).await;
+            }
+        });
+        
+        Ok(manager)
+    }
+    
+    pub async fn analyze_usb_device(&self, device: UsbDevice) -> Result<ThreatAnalysis> {
+        let sandbox_id = Uuid::new_v4();
+        
+        // Create VM snapshot for rapid deployment
+        let vm_handle = self.create_vm_instance(&sandbox_id).await?;
+        
+        // Mount USB device in VM with appropriate isolation
+        self.mount_device_in_vm(&vm_handle, &device).await?;
+        
+        // Start comprehensive analysis
+        let analysis = self.run_comprehensive_analysis(&sandbox_id, &device, &vm_handle).await?;
+        
+        // Update ML model with new features
+        self.update_ml_model(&analysis).await?;
+        
+        // Share threat intelligence with mesh network
+        if analysis.threat_level != ThreatLevel::Safe {
+            self.broadcast_threat_intelligence(&analysis).await?;
+        }
+        
+        // Clean up VM
+        self.cleanup_vm(&vm_handle).await?;
+        
+        Ok(analysis)
+    }
+    
+    async fn create_vm_instance(&self, sandbox_id: &Uuid) -> Result<VmHandle> {
+        let vm_id = format!("usb-sandbox-{}", sandbox_id);
+        
+        // Create QEMU VM with hardened configuration
+        let qemu_args = vec![
+            "-machine".to_string(), "pc-i440fx-2.12,accel=kvm".to_string(),
+            "-cpu".to_string(), "host,-vmx,-svm".to_string(), // Disable nested virtualization
+            "-m".to_string(), format!("{}M", self.config.memory_limit_mb),
+            "-smp".to_string(), format!("cores={}", self.config.cpu_cores),
+            "-netdev".to_string(), "none,id=net0".to_string(), // Start with no network
+            "-device".to_string(), "rtl8139,netdev=net0".to_string(),
+            "-drive".to_string(), format!("file=sandbox-{}.qcow2,format=qcow2,if=virtio", sandbox_id),
+            "-monitor".to_string(), format!("unix:/tmp/monitor-{}.sock,server,nowait", sandbox_id),
+            "-qmp".to_string(), format!("unix:/tmp/qmp-{}.sock,server,nowait", sandbox_id),
+            "-sandbox".to_string(), "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny".to_string(),
+            "-daemonize".to_string(),
+            "-no-reboot".to_string(),
+            "-watchdog".to_string(), "i6300esb".to_string(),
+            "-watchdog-action".to_string(), "reset".to_string(),
+        ];
+        
+        // Execute QEMU with security restrictions
+        let output = tokio::process::Command::new("qemu-system-x86_64")
+            .args(&qemu_args)
+            .output()
+            .await?;
+        
+        if !output.status.success() {
+            return Err(anyhow!("Failed to start VM: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+        
+        Ok(VmHandle {
+            vm_id,
+            snapshot_id: None,
+            monitor_socket: format!("/tmp/monitor-{}.sock", sandbox_id),
+            qmp_socket: format!("/tmp/qmp-{}.sock", sandbox_id),
+        })
+    }
+    
+    async fn mount_device_in_vm(&self, vm_handle: &VmHandle, device: &UsbDevice) -> Result<()> {
+        // Configure USB passthrough with security restrictions
+        let qmp_command = serde_json::json!({
+            "execute": "device_add",
+            "arguments": {
+                "driver": "usb-host",
+                "vendorid": device.vendor_id,
+                "productid": device.product_id,
+                "id": format!("usb-{}", device.id),
+            }
+        });
+        
+        // Send command via QMP socket
+        self.send_qmp_command(&vm_handle.qmp_socket, &qmp_command).await?;
+        
+        // Set up filesystem monitoring in guest
+        self.setup_filesystem_monitoring(vm_handle).await?;
+        
+        Ok(())
+    }
+    
+    async fn run_comprehensive_analysis(&self, sandbox_id: &Uuid, device: &UsbDevice, vm_handle: &VmHandle) -> Result<ThreatAnalysis> {
+        let mut analysis = ThreatAnalysis {
+            device_id: device.id,
+            sandbox_id: *sandbox_id,
+            timestamp: chrono::Utc::now(),
+            threat_level: ThreatLevel::Safe,
+            indicators: Vec::new(),
+            behavioral_analysis: BehavioralAnalysis {
+                processes_created: Vec::new(),
+                files_accessed: Vec::new(),
+                network_connections: Vec::new(),
+                registry_modifications: Vec::new(),
+                api_calls: Vec::new(),
+                privilege_escalation_attempts: 0,
+                anti_analysis_techniques: Vec::new(),
+            },
+            file_analysis: Vec::new(),
+            network_analysis: None,
+            memory_analysis: None,
+        };
+        
+        // Phase 1: Static Analysis
+        let static_results = self.perform_static_analysis(device).await?;
+        analysis.file_analysis.extend(static_results);
+        
+        // Phase 2: Dynamic Analysis with Behavioral Monitoring
+        let behavioral_results = self.perform_behavioral_analysis(vm_handle).await?;
+        analysis.behavioral_analysis = behavioral_results;
+        
+        // Phase 3: Network Traffic Analysis (if enabled)
+        if matches!(self.config.network_isolation, NetworkIsolation::Monitored | NetworkIsolation::Honeypot) {
+            analysis.network_analysis = Some(self.perform_network_analysis(vm_handle).await?);
+        }
+        
+        // Phase 4: Memory Analysis for Advanced Threats
+        if matches!(self.config.analysis_depth, AnalysisDepth::Deep | AnalysisDepth::Forensic) {
+            analysis.memory_analysis = Some(self.perform_memory_analysis(vm_handle).await?);
+        }
+        
+        // Phase 5: ML-Based Threat Classification
+        analysis.threat_level = self.classify_threat_level(&analysis).await?;
+        
+        // Phase 6: Generate Threat Indicators
+        analysis.indicators = self.extract_threat_indicators(&analysis).await?;
+        
+        Ok(analysis)
+    }
+    
+    async fn perform_static_analysis(&self, device: &UsbDevice) -> Result<Vec<FileAnalysis>> {
+        let mut results = Vec::new();
+        
+        if let Some(mount_point) = &device.mount_point {
+            // Recursively analyze all files on the USB device
+            for entry in walkdir::WalkDir::new(mount_point).max_depth(10) {
+                let entry = entry?;
+                if entry.file_type().is_file() {
+                    let file_analysis = self.analyze_file(entry.path()).await?;
+                    results.push(file_analysis);
+                }
+            }
+        }
+        
+        Ok(results)
+    }
+    
+    async fn analyze_file(&self, file_path: &Path) -> Result<FileAnalysis> {
+        use sha2::{Sha256, Digest};
+        use std::fs;
+        
+        let file_content = fs::read(file_path)?;
+        let mut hasher = Sha256::new();
+        hasher.update(&file_content);
+        let file_hash = format!("{:x}", hasher.finalize());
+        
+        let file_size = file_content.len() as u64;
+        let entropy = self.calculate_entropy(&file_content);
+        
+        // Detect file type
+        let file_type = self.detect_file_type(&file_content, file_path);
+        
+        // Extract strings
+        let strings = self.extract_strings(&file_content);
+        
+        // Analyze PE structure if applicable
+        let pe_analysis = if file_type.contains("PE") {
+            Some(self.analyze_pe_structure(&file_content)?)
+        } else {
+            None
+        };
+        
+        // Scan with YARA rules
+        let signatures = self.scan_with_yara(&file_content).await?;
+        
+        Ok(FileAnalysis {
+            file_path: file_path.to_path_buf(),
+            file_hash,
+            file_size,
+            file_type,
+            entropy,
+            signatures,
+            static_analysis: StaticAnalysis {
+                pe_analysis,
+                strings,
+                imports: Vec::new(), // TODO: Extract PE imports
+                exports: Vec::new(), // TODO: Extract PE exports
+                sections: Vec::new(), // TODO: Extract PE sections
+                certificates: Vec::new(), // TODO: Extract certificates
+            },
+            dynamic_analysis: None,
+        })
+    }
+    
+    fn calculate_entropy(&self, data: &[u8]) -> f64 {
+        let mut frequencies = [0u32; 256];
+        for &byte in data {
+            frequencies[byte as usize] += 1;
+        }
+        
+        let total = data.len() as f64;
+        let mut entropy = 0.0;
+        
+        for &count in &frequencies {
+            if count > 0 {
+                let probability = count as f64 / total;
+                entropy -= probability * probability.log2();
+            }
+        }
+        
+        entropy
+    }
+    
+    fn detect_file_type(&self, data: &[u8], path: &Path) -> String {
+        // Check magic bytes
+        if data.len() >= 2 {
+            match &data[0..2] {
+                [0x4D, 0x5A] => return "PE Executable".to_string(),
+                [0x50, 0x4B] => return "ZIP Archive".to_string(),
+                [0xFF, 0xD8] => return "JPEG Image".to_string(),
+                [0x89, 0x50] if data.len() >= 8 && &data[0..8] == b"\x89PNG\r\n\x1a\n" => {
+                    return "PNG Image".to_string();
+                }
+                _ => {}
+            }
+        }
+        
+        // Fallback to extension
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("Unknown")
+            .to_string()
+    }
+    
+    fn extract_strings(&self, data: &[u8]) -> Vec<String> {
+        let mut strings = Vec::new();
+        let mut current_string = Vec::new();
+        
+        for &byte in data {
+            if byte >= 32 && byte <= 126 {
+                current_string.push(byte);
+            } else {
+                if current_string.len() >= 4 {
+                    if let Ok(s) = String::from_utf8(current_string.clone()) {
+                        strings.push(s);
+                    }
+                }
+                current_string.clear();
+            }
+        }
+        
+        if current_string.len() >= 4 {
+            if let Ok(s) = String::from_utf8(current_string) {
+                strings.push(s);
+            }
+        }
+        
+        strings.truncate(1000); // Limit to prevent memory issues
+        strings
+    }
+    
+    fn analyze_pe_structure(&self, data: &[u8]) -> Result<PeAnalysis> {
+        // Simplified PE parsing - in production use a proper PE parser
+        // This is just a placeholder showing the structure
+        Ok(PeAnalysis {
+            compile_time: chrono::Utc::now(), // TODO: Parse actual timestamp
+            entry_point: 0x1000, // TODO: Parse actual entry point
+            image_base: 0x400000, // TODO: Parse actual image base
+            subsystem: "Windows CUI".to_string(), // TODO: Parse actual subsystem
+            dll_characteristics: vec!["DYNAMIC_BASE".to_string(), "NX_COMPAT".to_string()],
+        })
+    }
+    
+    async fn scan_with_yara(&self, data: &[u8]) -> Result<Vec<String>> {
+        // Placeholder for YARA scanning
+        // In production, integrate with actual YARA engine
+        let mut signatures = Vec::new();
+        
+        // Check for common malware patterns
+        if data.windows(4).any(|window| window == b"calc") {
+            signatures.push("Suspicious_Calculator_Reference".to_string());
+        }
+        
+        if data.windows(8).any(|window| window == b"powershell") {
+            signatures.push("PowerShell_Reference".to_string());
+        }
+        
+        Ok(signatures)
+    }
+    
+    async fn perform_behavioral_analysis(&self, vm_handle: &VmHandle) -> Result<BehavioralAnalysis> {
+        // This would integrate with the VM's guest agent to monitor behavior
+        // For now, return a placeholder structure
+        Ok(BehavioralAnalysis {
+            processes_created: Vec::new(),
+            files_accessed: Vec::new(),
+            network_connections: Vec::new(),
+            registry_modifications: Vec::new(),
+            api_calls: Vec::new(),
+            privilege_escalation_attempts: 0,
+            anti_analysis_techniques: Vec::new(),
+        })
+    }
+    
+    async fn perform_network_analysis(&self, vm_handle: &VmHandle) -> Result<NetworkAnalysis> {
+        Ok(NetworkAnalysis {
+            total_connections: 0,
+            unique_destinations: 0,
+            protocol_distribution: HashMap::new(),
+            suspicious_domains: Vec::new(),
+            data_exfiltration_detected: false,
+            c2_communication_detected: false,
+        })
+    }
+    
+    async fn perform_memory_analysis(&self, vm_handle: &VmHandle) -> Result<MemoryAnalysis> {
+        Ok(MemoryAnalysis {
+            heap_analysis: HeapAnalysis {
+                heap_size: 0,
+                allocated_chunks: 0,
+                free_chunks: 0,
+                suspicious_allocations: Vec::new(),
+            },
+            stack_analysis: StackAnalysis {
+                stack_size: 0,
+                return_address_overwrites: 0,
+                rop_gadgets_found: Vec::new(),
+            },
+            injection_artifacts: Vec::new(),
+            yara_matches: Vec::new(),
+        })
+    }
+    
+    async fn classify_threat_level(&self, analysis: &ThreatAnalysis) -> Result<ThreatLevel> {
+        // Use ML model to classify threat level based on features
+        let mut threat_score = 0.0;
+        
+        // File entropy analysis
+        for file in &analysis.file_analysis {
+            if file.entropy > 7.5 {
+                threat_score += 0.3; // High entropy suggests encryption/packing
+            }
+        }
+        
+        // Signature matches
+        for file in &analysis.file_analysis {
+            threat_score += file.signatures.len() as f32 * 0.2;
+        }
+        
+        // Behavioral indicators
+        if analysis.behavioral_analysis.privilege_escalation_attempts > 0 {
+            threat_score += 0.5;
+        }
+        
+        if !analysis.behavioral_analysis.anti_analysis_techniques.is_empty() {
+            threat_score += 0.4;
+        }
+        
+        // Network activity
+        if let Some(net_analysis) = &analysis.network_analysis {
+            if net_analysis.c2_communication_detected {
+                threat_score += 0.8;
+            }
+            if net_analysis.data_exfiltration_detected {
+                threat_score += 0.7;
+            }
+        }
+        
+        Ok(match threat_score {
+            s if s >= 1.5 => ThreatLevel::Critical,
+            s if s >= 1.0 => ThreatLevel::Malicious,
+            s if s >= 0.5 => ThreatLevel::Suspicious,
+            _ => ThreatLevel::Safe,
+        })
+    }
+    
+    async fn extract_threat_indicators(&self, analysis: &ThreatAnalysis) -> Result<Vec<ThreatIndicator>> {
+        let mut indicators = Vec::new();
+        
+        // Extract file-based indicators
+        for file in &analysis.file_analysis {
+            // File hash indicators
+            indicators.push(ThreatIndicator {
+                indicator_type: IndicatorType::FileHash,
+                value: file.file_hash.clone(),
+                confidence: 0.9,
+                description: format!("File hash for {}", file.file_path.display()),
+            });
+            
+            // Suspicious file names
+            let filename = file.file_path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            
+            if self.is_suspicious_filename(filename) {
+                indicators.push(ThreatIndicator {
+                    indicator_type: IndicatorType::FileName,
+                    value: filename.to_string(),
+                    confidence: 0.7,
+                    description: "Suspicious filename pattern detected".to_string(),
+                });
+            }
+            
+            // Extract indicators from strings
+            for string in &file.static_analysis.strings {
+                if self.is_suspicious_string(string) {
+                    indicators.push(ThreatIndicator {
+                        indicator_type: IndicatorType::ProcessName,
+                        value: string.clone(),
+                        confidence: 0.6,
+                        description: "Suspicious string found in file".to_string(),
+                    });
+                }
+            }
+        }
+        
+        // Extract network indicators
+        for conn in &analysis.behavioral_analysis.network_connections {
+            indicators.push(ThreatIndicator {
+                indicator_type: IndicatorType::NetworkConnection,
+                value: format!("{}:{}", conn.dest_ip, conn.dest_port),
+                confidence: 0.8,
+                description: "Network connection observed during analysis".to_string(),
+            });
+        }
+        
+        // Extract API call indicators
+        let suspicious_apis = [
+            "CreateRemoteThread", "WriteProcessMemory", "VirtualAllocEx",
+            "SetWindowsHookEx", "NtCreateSection", "ZwMapViewOfSection"
+        ];
+        
+        for api_call in &analysis.behavioral_analysis.api_calls {
+            if suspicious_apis.contains(&api_call.function_name.as_str()) {
+                indicators.push(ThreatIndicator {
+                    indicator_type: IndicatorType::ApiCall,
+                    value: api_call.function_name.clone(),
+                    confidence: 0.75,
+                    description: "Suspicious API call detected".to_string(),
+                });
+            }
+        }
+        
+        Ok(indicators)
+    }
+    
+    fn is_suspicious_filename(&self, filename: &str) -> bool {
+        let suspicious_patterns = [
+            r".*\.exe\..*",  // Double extension
+            r".*\.(scr|pif|com|bat|cmd)$",  // Executable extensions
+            r"^(autorun|setup|install|update)\..*",  // Common autorun names
+            r".*\s+\.(exe|scr|pif)$",  // Spaces before extension
+        ];
+        
+        for pattern in &suspicious_patterns {
+            if regex::Regex::new(pattern).unwrap().is_match(filename) {
+                return true;
+            }
+        }
+        false
+    }
+    
+    fn is_suspicious_string(&self, string: &str) -> bool {
+        let suspicious_keywords = [
+            "cmd.exe", "powershell", "regsvr32", "rundll32",
+            "CreateProcess", "ShellExecute", "WinExec",
+            "http://", "https://", "ftp://",
+            "Registry", "HKEY_", "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+        ];
+        
+        for keyword in &suspicious_keywords {
+            if string.to_lowercase().contains(&keyword.to_lowercase()) {
+                return true;
+            }
+        }
+        false
+    }
+    
+    async fn update_ml_model(&self, analysis: &ThreatAnalysis) -> Result<()> {
+        // Extract features for ML model
+        let features = self.extract_ml_features(analysis);
+        
+        // Update the isolation forest model
+        let mut detector = self.ml_detector.lock().unwrap();
+        // Note: In practice, you'd batch these updates and retrain periodically
+        // detector.partial_fit(&features)?;
+        
+        Ok(())
+    }
+    
+    fn extract_ml_features(&self, analysis: &ThreatAnalysis) -> Vec<f64> {
+        let mut features = Vec::new();
+        
+        // File-based features
+        let avg_entropy = analysis.file_analysis.iter()
+            .map(|f| f.entropy)
+            .sum::<f64>() / analysis.file_analysis.len().max(1) as f64;
+        features.push(avg_entropy);
+        
+        let total_file_size = analysis.file_analysis.iter()
+            .map(|f| f.file_size)
+            .sum::<u64>() as f64;
+        features.push(total_file_size.log10());
+        
+        let executable_count = analysis.file_analysis.iter()
+            .filter(|f| f.file_type.contains("PE") || f.file_type.contains("executable"))
+            .count() as f64;
+        features.push(executable_count);
+        
+        // Behavioral features
+        features.push(analysis.behavioral_analysis.processes_created.len() as f64);
+        features.push(analysis.behavioral_analysis.files_accessed.len() as f64);
+        features.push(analysis.behavioral_analysis.network_connections.len() as f64);
+        features.push(analysis.behavioral_analysis.registry_modifications.len() as f64);
+        features.push(analysis.behavioral_analysis.privilege_escalation_attempts as f64);
+        features.push(analysis.behavioral_analysis.anti_analysis_techniques.len() as f64);
+        
+        // Network features
+        if let Some(net_analysis) = &analysis.network_analysis {
+            features.push(net_analysis.total_connections as f64);
+            features.push(net_analysis.unique_destinations as f64);
+            features.push(if net_analysis.data_exfiltration_detected { 1.0 } else { 0.0 });
+            features.push(if net_analysis.c2_communication_detected { 1.0 } else { 0.0 });
+        } else {
+            features.extend_from_slice(&[0.0, 0.0, 0.0, 0.0]);
+        }
+        
+        // Memory features
+        if let Some(mem_analysis) = &analysis.memory_analysis {
+            features.push(mem_analysis.heap_analysis.suspicious_allocations.len() as f64);
+            features.push(mem_analysis.injection_artifacts.len() as f64);
+            features.push(mem_analysis.yara_matches.len() as f64);
+        } else {
+            features.extend_from_slice(&[0.0, 0.0, 0.0]);
+        }
+        
+        features
+    }
+    
+    async fn broadcast_threat_intelligence(&self, analysis: &ThreatAnalysis) -> Result<()> {
+        let mesh = self.mesh_node.lock().unwrap();
+        
+        let threat_info = crate::coordination::mesh::ThreatInfo {
+            source_ip: "127.0.0.1".to_string(), // USB device doesn't have IP
+            indicators: analysis.indicators.iter()
+                .map(|i| i.value.clone())
+                .collect(),
+            confidence: analysis.indicators.iter()
+                .map(|i| i.confidence)
+                .sum::<f32>() / analysis.indicators.len().max(1) as f32,
+        };
+        
+        mesh.broadcast_threat(threat_info).await?;
+        Ok(())
+    }
+    
+    async fn setup_filesystem_monitoring(&self, vm_handle: &VmHandle) -> Result<()> {
+        // Install filesystem monitoring agent in the VM
+        let script = r#"
+            # PowerShell script to monitor filesystem changes
+            $watcher = New-Object System.IO.FileSystemWatcher
+            $watcher.Path = "C:\"
+            $watcher.IncludeSubdirectories = $true
+            $watcher.EnableRaisingEvents = $true
+            
+            Register-ObjectEvent -InputObject $watcher -EventName "Created" -Action {
+                $path = $Event.SourceEventArgs.FullPath
+                $name = $Event.SourceEventArgs.Name
+                $changeType = $Event.SourceEventArgs.ChangeType
+                $timeStamp = $Event.TimeGenerated
+                Write-Host "File $changeType at $timeStamp: $path"
+            }
+        "#;
+        
+        // Execute monitoring script in VM via guest agent
+        self.execute_in_vm(vm_handle, script).await?;
+        Ok(())
+    }
+    
+    async fn execute_in_vm(&self, vm_handle: &VmHandle, script: &str) -> Result<String> {
+        // Execute command in VM via QEMU guest agent
+        let qmp_command = serde_json::json!({
+            "execute": "guest-exec",
+            "arguments": {
+                "path": "powershell.exe",
+                "arg": ["-Command", script],
+                "capture-output": true
+            }
+        });
+        
+        self.send_qmp_command(&vm_handle.qmp_socket, &qmp_command).await
+    }
+    
+    async fn send_qmp_command(&self, socket_path: &str, command: &serde_json::Value) -> Result<String> {
+        use tokio::net::UnixStream;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        
+        let mut stream = UnixStream::connect(socket_path).await?;
+        
+        // Send QMP command
+        let command_str = serde_json::to_string(command)?;
+        stream.write_all(command_str.as_bytes()).await?;
+        stream.write_all(b"\n").await?;
+        
+        // Read response
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await?;
+        
+        Ok(response)
+    }
+    
+    async fn cleanup_vm(&self, vm_handle: &VmHandle) -> Result<()> {
+        // Gracefully shutdown VM
+        let shutdown_command = serde_json::json!({
+            "execute": "system_powerdown"
+        });
+        
+        let _ = self.send_qmp_command(&vm_handle.qmp_socket, &shutdown_command).await;
+        
+        // Wait for shutdown or force kill after timeout
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        
+        // Force kill if still running
+        tokio::process::Command::new("pkill")
+            .args(&["-f", &vm_handle.vm_id])
+            .output()
+            .await?;
+        
+        // Clean up VM files
+        tokio::fs::remove_file(format!("sandbox-{}.qcow2", vm_handle.vm_id.split('-').last().unwrap())).await?;
+        tokio::fs::remove_file(&vm_handle.monitor_socket).await?;
+        tokio::fs::remove_file(&vm_handle.qmp_socket).await?;
+        
+        Ok(())
+    }
+    
+    async fn process_event(event: SandboxEvent) {
+        match event {
+            SandboxEvent::ThreatDetected { sandbox_id, threat } => {
+                log::warn!("Threat detected in sandbox {}: {:?}", sandbox_id, threat.threat_level);
+                // Could trigger additional actions like alerting, blocking, etc.
+            }
+            SandboxEvent::AnalysisComplete(sandbox_id) => {
+                log::info!("Analysis complete for sandbox {}", sandbox_id);
+            }
+            SandboxEvent::Error { sandbox_id, error } => {
+                log::error!("Error in sandbox {}: {}", sandbox_id, error);
+            }
+            _ => {}
+        }
+    }
+}
+
+// Advanced Evasion Detection Module
+pub struct EvasionDetector {
+    vm_artifacts: Vec<String>,
+    timing_baseline: Duration,
+    environment_fingerprints: HashMap<String, String>,
+}
+
+impl EvasionDetector {
+    pub fn new() -> Self {
+        Self {
+            vm_artifacts: vec![
+                "VBoxService.exe".to_string(),
+                "vmtoolsd.exe".to_string(),
+                "vmsrvc.exe".to_string(),
+                "qemu-ga.exe".to_string(),
+            ],
+            timing_baseline: Duration::from_millis(100),
+            environment_fingerprints: Self::build_environment_fingerprints(),
+        }
+    }
+    
+    fn build_environment_fingerprints() -> HashMap<String, String> {
+        let mut fingerprints = HashMap::new();
+        
+        // Common VM detection artifacts
+        fingerprints.insert("registry".to_string(), "HKEY_LOCAL_MACHINE\\SYSTEM\\ControlSet001\\Services\\VBoxService".to_string());
+        fingerprints.insert("registry".to_string(), "HKEY_LOCAL_MACHINE\\HARDWARE\\ACPI\\DSDT\\VBOX__".to_string());
+        fingerprints.insert("file".to_string(), "C:\\Program Files\\VMware\\VMware Tools\\".to_string());
+        fingerprints.insert("file".to_string(), "C:\\Windows\\System32\\drivers\\vmmouse.sys".to_string());
+        fingerprints.insert("process".to_string(), "VBoxTray.exe".to_string());
+        fingerprints.insert("service".to_string(), "VBoxService".to_string());
+        
+        fingerprints
+    }
+    
+    pub fn detect_vm_evasion(&self, analysis: &ThreatAnalysis) -> Vec<AntiAnalysisTechnique> {
+        let mut techniques = Vec::new();
+        
+        // Check for VM artifact detection attempts
+        for process in &analysis.behavioral_analysis.processes_created {
+            if self.vm_artifacts.iter().any(|artifact| process.command_line.contains(artifact)) {
+                techniques.push(AntiAnalysisTechnique::VmDetection);
+            }
+        }
+        
+        // Check for timing-based evasion
+        for api_call in &analysis.behavioral_analysis.api_calls {
+            if api_call.function_name == "GetTickCount" || api_call.function_name == "QueryPerformanceCounter" {
+                techniques.push(AntiAnalysisTechnique::TimeBasedEvasion);
+            }
+        }
+        
+        // Check for debugger detection
+        let debugger_apis = ["IsDebuggerPresent", "CheckRemoteDebuggerPresent", "NtQueryInformationProcess"];
+        for api_call in &analysis.behavioral_analysis.api_calls {
+            if debugger_apis.contains(&api_call.function_name.as_str()) {
+                techniques.push(AntiAnalysisTechnique::DebuggerDetection);
+            }
+        }
+        
+        // Check for environment checks
+        for file_access in &analysis.behavioral_analysis.files_accessed {
+            let path_str = file_access.path.to_string_lossy();
+            if path_str.contains("VirtualBox") || path_str.contains("VMware") || path_str.contains("QEMU") {
+                techniques.push(AntiAnalysisTechnique::EnvironmentChecks);
+            }
+        }
+        
+        techniques.into_iter().collect::<std::collections::HashSet<_>>().into_iter().collect()
+    }
+}
+
+// Forensic Analysis Module for Deep Investigation
+pub struct ForensicAnalyzer {
+    memory_dumper: MemoryDumper,
+    artifact_extractor: ArtifactExtractor,
+    timeline_builder: TimelineBuilder,
+}
+
+impl ForensicAnalyzer {
+    pub fn new() -> Self {
+        Self {
+            memory_dumper: MemoryDumper::new(),
+            artifact_extractor: ArtifactExtractor::new(),
+            timeline_builder: TimelineBuilder::new(),
+        }
+    }
+    
+    pub async fn perform_forensic_analysis(&self, vm_handle: &VmHandle, device: &UsbDevice) -> Result<ForensicReport> {
+        let mut report = ForensicReport {
+            device_id: device.id,
+            timestamp: chrono::Utc::now(),
+            memory_dump: None,
+            filesystem_artifacts: Vec::new(),
+            registry_artifacts: Vec::new(),
+            network_artifacts: Vec::new(),
+            timeline: Vec::new(),
+            volatility_analysis: None,
+        };
+        
+        // Create memory dump
+        report.memory_dump = Some(self.memory_dumper.create_dump(vm_handle).await?);
+        
+        // Extract filesystem artifacts
+        report.filesystem_artifacts = self.artifact_extractor.extract_filesystem_artifacts(vm_handle).await?;
+        
+        // Extract registry artifacts
+        report.registry_artifacts = self.artifact_extractor.extract_registry_artifacts(vm_handle).await?;
+        
+        // Build timeline of events
+        report.timeline = self.timeline_builder.build_timeline(&report).await?;
+        
+        // Perform Volatility analysis on memory dump
+        if let Some(ref dump) = report.memory_dump {
+            report.volatility_analysis = Some(self.run_volatility_analysis(dump).await?);
+        }
+        
+        Ok(report)
+    }
+    
+    async fn run_volatility_analysis(&self, dump: &MemoryDump) -> Result<VolatilityAnalysis> {
+        // Run Volatility framework plugins
+        let mut analysis = VolatilityAnalysis {
+            processes: Vec::new(),
+            network_connections: Vec::new(),
+            loaded_modules: Vec::new(),
+            injected_code: Vec::new(),
+            hidden_processes: Vec::new(),
+            malware_signatures: Vec::new(),
+        };
+        
+        // This would execute actual Volatility commands
+        // For now, return placeholder data
+        Ok(analysis)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ForensicReport {
+    pub device_id: Uuid,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub memory_dump: Option<MemoryDump>,
+    pub filesystem_artifacts: Vec<FilesystemArtifact>,
+    pub registry_artifacts: Vec<RegistryArtifact>,
+    pub network_artifacts: Vec<NetworkArtifact>,
+    pub timeline: Vec<TimelineEvent>,
+    pub volatility_analysis: Option<VolatilityAnalysis>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MemoryDump {
+    pub file_path: PathBuf,
+    pub size_bytes: u64,
+    pub md5_hash: String,
+    pub creation_time: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FilesystemArtifact {
+    pub path: PathBuf,
+    pub artifact_type: FilesystemArtifactType,
+    pub content: Vec<u8>,
+    pub metadata: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum FilesystemArtifactType {
+    ExecutableFile,
+    ScriptFile,
+    ConfigFile,
+    LogFile,
+    DatabaseFile,
+    TemporaryFile,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegistryArtifact {
+    pub hive: String,
+    pub key_path: String,
+    pub value_name: Option<String>,
+    pub value_data: Option<String>,
+    pub last_modified: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NetworkArtifact {
+    pub connection_type: NetworkArtifactType,
+    pub local_address: String,
+    pub remote_address: String,
+    pub process_id: u32,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum NetworkArtifactType {
+    TcpConnection,
+    UdpConnection,
+    DnsQuery,
+    HttpRequest,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TimelineEvent {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub event_type: TimelineEventType,
+    pub description: String,
+    pub source: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum TimelineEventType {
+    FileCreated,
+    FileModified,
+    FileDeleted,
+    ProcessStarted,
+    ProcessTerminated,
+    NetworkConnection,
+    RegistryModified,
+    ServiceStarted,
+    ServiceStopped,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VolatilityAnalysis {
+    pub processes: Vec<VolatilityProcess>,
+    pub network_connections: Vec<VolatilityNetworkConnection>,
+    pub loaded_modules: Vec<VolatilityModule>,
+    pub injected_code: Vec<InjectedCodeSegment>,
+    pub hidden_processes: Vec<HiddenProcess>,
+    pub malware_signatures: Vec<MalwareSignature>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VolatilityProcess {
+    pub pid: u32,
+    pub ppid: u32,
+    pub name: String,
+    pub command_line: String,
+    pub create_time: chrono::DateTime<chrono::Utc>,
+    pub exit_time: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VolatilityNetworkConnection {
+    pub local_address: String,
+    pub remote_address: String,
+    pub pid: u32,
+    pub state: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VolatilityModule {
+    pub base_address: u64,
+    pub size: u64,
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InjectedCodeSegment {
+    pub process_id: u32,
+    pub base_address: u64,
+    pub size: u64,
+    pub protection: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HiddenProcess {
+    pub suspected_pid: u32,
+    pub detection_method: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MalwareSignature {
+    pub signature_name: String,
+    pub matched_address: u64,
+    pub matched_content: String,
+    pub confidence: f32,
+}
+
+// Placeholder implementations for forensic components
+pub struct MemoryDumper;
+pub struct ArtifactExtractor;
+pub struct TimelineBuilder;
+
+impl MemoryDumper {
+    pub fn new() -> Self { Self }
+    
+    pub async fn create_dump(&self, vm_handle: &VmHandle) -> Result<MemoryDump> {
+        Ok(MemoryDump {
+            file_path: PathBuf::from("/tmp/memory_dump.raw"),
+            size_bytes: 1024 * 1024 * 1024, // 1GB placeholder
+            md5_hash: "abc123def456".to_string(),
+            creation_time: chrono::Utc::now(),
+        })
+    }
+}
+
+impl ArtifactExtractor {
+    pub fn new() -> Self { Self }
+    
+    pub async fn extract_filesystem_artifacts(&self, vm_handle: &VmHandle) -> Result<Vec<FilesystemArtifact>> {
+        Ok(Vec::new()) // Placeholder
+    }
+    
+    pub async fn extract_registry_artifacts(&self, vm_handle: &VmHandle) -> Result<Vec<RegistryArtifact>> {
+        Ok(Vec::new()) // Placeholder
+    }
+}
+
+impl TimelineBuilder {
+    pub fn new() -> Self { Self }
+    
+    pub async fn build_timeline(&self, report: &ForensicReport) -> Result<Vec<TimelineEvent>> {
+        Ok(Vec::new()) // Placeholder
+    }
+}
+
+// Integration with LobsterPot coordination mesh
+impl UsbSandboxManager {
+    pub async fn integrate_with_mesh(&self) -> Result<()> {
+        let mut mesh = self.mesh_node.lock().unwrap();
+        mesh.join_network("lobsterpot.mesh").await?;
+        
+        // Set up message handlers for coordination
+        // This would be implemented with proper async message handling
+        Ok(())
+    }
+    
+    pub async fn share_threat_intelligence(&self, analysis: &ThreatAnalysis) -> Result<()> {
+        // Convert analysis to mesh-compatible format
+        let threat_info = crate::coordination::mesh::ThreatInfo {
+            source_ip: "USB_DEVICE".to_string(),
+            indicators: analysis.indicators.iter().map(|i| i.value.clone()).collect(),
+            confidence: analysis.threat_level as u8 as f32 / 3.0, // Convert enum to confidence score
+        };
+        
+        let mesh = self.mesh_node.lock().unwrap();
+        mesh.broadcast_threat(threat_info).await?;
+        
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[tokio::test]
+    async fn test_sandbox_creation() {
+        let config = SandboxConfig {
+            vm_type: VmType::Qemu,
+            memory_limit_mb: 2048,
+            cpu_cores: 2,
+            disk_size_mb: 10240,
+            network_isolation: NetworkIsolation::Complete,
+            filesystem_isolation: FilesystemIsolation::ReadOnly,
+            timeout_seconds: 300,
+            snapshot_enabled: true,
+            analysis_depth: AnalysisDepth::Basic,
+        };
+        
+        let manager = UsbSandboxManager::new(config).await.unwrap();
+        // Test basic functionality
+    }
+    
+    #[test]
+    fn test_entropy_calculation() {
+        let manager = UsbSandboxManager {
+            config: SandboxConfig {
+                vm_type: VmType::Qemu,
+                memory_limit_mb: 1024,
+                cpu_cores: 1,
+                disk_size_mb: 5120,
+                network_isolation: NetworkIsolation::Complete,
+                filesystem_isolation: FilesystemIsolation::ReadOnly,
+                timeout_seconds: 180,
+                snapshot_enabled: false,
+                analysis_depth: AnalysisDepth::Basic,
+            },
+            active_sandboxes: Arc::new(RwLock::new(HashMap::new())),
+            threat_db: Arc::new(Mutex::new(unimplemented!())),
+            mesh_node: Arc::new(Mutex::new(unimplemented!())),
+            deception_network: Arc::new(Mutex::new(unimplemented!())),
+            ml_detector: Arc::new(Mutex::new(unimplemented!())),
+            event_bus: unimplemented!(),
+        };
+        
+        let test_data = b"AAAAAAAAAA"; // Low entropy
+        let entropy = manager.calculate_entropy(test_data);
+        assert!(entropy < 1.0);
+        
+        let random_data = (0..256).collect::<Vec<u8>>(); // High entropy
+        let entropy = manager.calculate_entropy(&random_data);
+        assert!(entropy > 7.0);
+    }
+}
