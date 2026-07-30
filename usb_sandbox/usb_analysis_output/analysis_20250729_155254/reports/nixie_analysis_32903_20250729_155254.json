@@ -1,0 +1,25 @@
+{
+  "analysis_summary": {
+    "behavioral_anomalies": 0,
+    "files_analyzed": 0,
+    "threat_level": "Safe",
+    "total_indicators": 1
+  },
+  "device_info": {
+    "device_type": "Unknown",
+    "first_seen": "2025-07-29T15:52:54.789270100Z",
+    "product_id": "0AAA",
+    "vendor_id": "8087"
+  },
+  "key_findings": {
+    "suspicious_files": [],
+    "threat_indicators": [
+      "TRCorp Nixie Clock"
+    ]
+  },
+  "protocol_analysis": {
+    "communication_type": "Ukrainian Nixie Clock Protocol",
+    "custom_protocol_detected": true,
+    "vid_pid": "8087:0AAA"
+  }
+}

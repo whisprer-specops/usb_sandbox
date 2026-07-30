@@ -1,0 +1,816 @@
+// VM-Based USB Sandbox - Integrated with Analysis Reporter
+// src/main.rs
+
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, RwLock};
+use tokio::fs as async_fs;
+use tokio::io::AsyncWriteExt;
+use uuid::Uuid;
+use serde::{Serialize, Deserialize};
+use anyhow::Result;
+
+// Core sandbox configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    pub vm_type: VmType,
+    pub memory_limit_mb: u32,
+    pub cpu_cores: u8,
+    pub disk_size_mb: u32,
+    pub network_isolation: NetworkIsolation,
+    pub filesystem_isolation: FilesystemIsolation,
+    pub timeout_seconds: u64,
+    pub snapshot_enabled: bool,
+    pub analysis_depth: AnalysisDepth,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ThreatLevel {
+    Safe,
+    Suspicious,
+    Malicious,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum AntiAnalysisTechnique {
+    VmDetection,
+    DebuggerDetection,
+    SandboxEvasion,
+    TimeBasedEvasion,
+    EnvironmentChecks,
+    PackerDetection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VmType {
+    Qemu,
+    VirtualBox,
+    VMware,
+    HyperV,
+    Xen,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NetworkIsolation {
+    Complete,
+    Honeypot,
+    Monitored,
+    Limited,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FilesystemIsolation {
+    ReadOnly,
+    CopyOnWrite,
+    Sandbox,
+    Memory,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AnalysisDepth {
+    Basic,
+    Behavioral,
+    Deep,
+    Forensic,
+}
+
+// USB device representation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsbDevice {
+    pub id: Uuid,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub device_path: PathBuf,
+    pub mount_point: Option<PathBuf>,
+    pub device_type: UsbDeviceType,
+    pub first_seen: chrono::DateTime<chrono::Utc>,
+    pub threat_score: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UsbDeviceType {
+    MassStorage,
+    HumanInterface,
+    Audio,
+    Video,
+    Network,
+    Unknown,
+}
+
+// Threat analysis results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreatAnalysis {
+    pub device_id: Uuid,
+    pub sandbox_id: Uuid,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub threat_level: ThreatLevel,
+    pub indicators: Vec<ThreatIndicator>,
+    pub behavioral_analysis: BehavioralAnalysis,
+    pub file_analysis: Vec<FileAnalysis>,
+    pub network_analysis: Option<NetworkAnalysis>,
+    pub memory_analysis: Option<MemoryAnalysis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreatIndicator {
+    pub indicator_type: IndicatorType,
+    pub value: String,
+    pub confidence: f32,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IndicatorType {
+    FileHash,
+    FileName,
+    ProcessName,
+    NetworkConnection,
+    RegistryKey,
+    ApiCall,
+    MemorySignature,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BehavioralAnalysis {
+    pub processes_created: Vec<ProcessInfo>,
+    pub files_accessed: Vec<FileAccess>,
+    pub network_connections: Vec<NetworkConnection>,
+    pub registry_modifications: Vec<RegistryModification>,
+    pub api_calls: Vec<ApiCall>,
+    pub privilege_escalation_attempts: u32,
+    pub anti_analysis_techniques: Vec<AntiAnalysisTechnique>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub command_line: String,
+    pub parent_pid: u32,
+    pub creation_time: chrono::DateTime<chrono::Utc>,
+    pub memory_usage: u64,
+    pub cpu_usage: f32,
+    pub dll_loads: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileAccess {
+    pub path: PathBuf,
+    pub operation: FileOperation,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub process_id: u32,
+    pub bytes_transferred: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FileOperation {
+    Read,
+    Write,
+    Delete,
+    Create,
+    Execute,
+    Modify,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkConnection {
+    pub source_ip: IpAddr,
+    pub dest_ip: IpAddr,
+    pub source_port: u16,
+    pub dest_port: u16,
+    pub protocol: String,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryModification {
+    pub key_path: String,
+    pub value_name: Option<String>,
+    pub operation: RegistryOperation,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RegistryOperation {
+    Create,
+    Read,
+    Write,
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiCall {
+    pub function_name: String,
+    pub module_name: String,
+    pub parameters: Vec<String>,
+    pub return_value: Option<String>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub process_id: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileAnalysis {
+    pub file_path: PathBuf,
+    pub file_hash: String,
+    pub file_size: u64,
+    pub file_type: String,
+    pub entropy: f64,
+    pub signatures: Vec<String>,
+    pub static_analysis: StaticAnalysis,
+    pub dynamic_analysis: Option<DynamicAnalysis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaticAnalysis {
+    pub pe_analysis: Option<PeAnalysis>,
+    pub strings: Vec<String>,
+    pub imports: Vec<String>,
+    pub exports: Vec<String>,
+    pub sections: Vec<SectionInfo>,
+    pub certificates: Vec<CertificateInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeAnalysis {
+    pub compile_time: chrono::DateTime<chrono::Utc>,
+    pub entry_point: u64,
+    pub image_base: u64,
+    pub subsystem: String,
+    pub dll_characteristics: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionInfo {
+    pub name: String,
+    pub virtual_address: u64,
+    pub virtual_size: u64,
+    pub raw_size: u64,
+    pub characteristics: Vec<String>,
+    pub entropy: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertificateInfo {
+    pub subject: String,
+    pub issuer: String,
+    pub serial_number: String,
+    pub valid_from: chrono::DateTime<chrono::Utc>,
+    pub valid_to: chrono::DateTime<chrono::Utc>,
+    pub is_trusted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicAnalysis {
+    pub execution_time: Duration,
+    pub code_injection_detected: bool,
+    pub shellcode_patterns: Vec<String>,
+    pub encryption_detected: bool,
+    pub packing_detected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkAnalysis {
+    pub total_connections: u32,
+    pub unique_destinations: u32,
+    pub protocol_distribution: HashMap<String, u32>,
+    pub suspicious_domains: Vec<String>,
+    pub data_exfiltration_detected: bool,
+    pub c2_communication_detected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryAnalysis {
+    pub heap_analysis: HeapAnalysis,
+    pub stack_analysis: StackAnalysis,
+    pub injection_artifacts: Vec<InjectionArtifact>,
+    pub yara_matches: Vec<YaraMatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeapAnalysis {
+    pub heap_size: u64,
+    pub allocated_chunks: u32,
+    pub free_chunks: u32,
+    pub suspicious_allocations: Vec<SuspiciousAllocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackAnalysis {
+    pub stack_size: u64,
+    pub return_address_overwrites: u32,
+    pub rop_gadgets_found: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuspiciousAllocation {
+    pub address: u64,
+    pub size: u64,
+    pub permissions: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InjectionArtifact {
+    pub injection_type: InjectionType,
+    pub source_process: u32,
+    pub target_process: u32,
+    pub injected_address: u64,
+    pub injected_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InjectionType {
+    DllInjection,
+    ProcessHollowing,
+    ReflectiveDllLoading,
+    ManualDllLoading,
+    AtomBombing,
+    ThreadExecution,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YaraMatch {
+    pub rule_name: String,
+    pub rule_family: String,
+    pub matched_strings: Vec<String>,
+    pub confidence: f32,
+}
+
+// Debug and Status structures
+#[derive(Debug)]
+pub struct ActiveSandbox {
+    pub id: Uuid,
+    pub device: UsbDevice,
+    pub vm_handle: VmHandle,
+    pub start_time: Instant,
+    pub status: SandboxStatus,
+    pub analysis_progress: AnalysisProgress,
+}
+
+#[derive(Debug)]
+pub enum SandboxStatus {
+    Initializing,
+    Running,
+    Analyzing,
+    Complete,
+    Failed(String),
+    Terminated,
+}
+
+#[derive(Debug)]
+pub struct AnalysisProgress {
+    pub static_analysis_complete: bool,
+    pub dynamic_analysis_complete: bool,
+    pub behavioral_analysis_complete: bool,
+    pub network_analysis_complete: bool,
+    pub memory_analysis_complete: bool,
+    pub overall_progress: f32,
+}
+
+#[derive(Debug)]
+pub struct VmHandle {
+    pub vm_id: String,
+    pub snapshot_id: Option<String>,
+    pub monitor_socket: String,
+    pub qmp_socket: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum SandboxEvent {
+    DeviceConnected(UsbDevice),
+    SandboxStarted(Uuid),
+    ThreatDetected { sandbox_id: Uuid, threat: ThreatAnalysis },
+    AnalysisComplete(Uuid),
+    SandboxTerminated(Uuid),
+    Error { sandbox_id: Uuid, error: String },
+}
+
+// Placeholder module structures
+pub mod database {
+    pub mod threat_db {
+        use anyhow::Result;
+        pub struct ThreatDatabase;
+        impl ThreatDatabase {
+            pub async fn new(_db_url: &str) -> Result<Self> { Ok(Self) }
+        }
+    }
+}
+
+pub mod coordination {
+    pub mod mesh {
+        use anyhow::Result;
+        use serde::{Serialize, Deserialize};
+        
+        pub struct MeshNode;
+        
+        #[derive(Debug, Serialize, Deserialize)]
+        pub struct ThreatInfo {
+            pub source_ip: String,
+            pub indicators: Vec<String>,
+            pub confidence: f32,
+        }
+        
+        impl MeshNode {
+            pub fn new() -> Self { Self }
+            pub async fn join_network(&mut self, _network: &str) -> Result<()> { Ok(()) }
+            pub async fn broadcast_threat(&self, _threat: ThreatInfo) -> Result<()> { Ok(()) }
+        }
+    }
+}
+
+pub mod honeypot {
+    pub mod deception_network {
+        use anyhow::Result;
+        
+        pub struct DeceptionNetwork;
+        
+        #[derive(Debug)]
+        pub enum HoneypotType {
+            FileServer,
+        }
+        
+        impl DeceptionNetwork {
+            pub fn new() -> Self { Self }
+            pub fn add_honeypot(self, _name: &str, _honeypot_type: HoneypotType) -> Self { self }
+            pub async fn deploy(self) -> Result<Self> { Ok(self) }
+        }
+    }
+}
+
+pub mod ml {
+    pub mod isolation_forest {
+        pub struct IsolationForestCustom;
+        impl IsolationForestCustom {
+            pub fn new(_n_trees: usize, _max_depth: usize, _sample_size: usize) -> Self { Self }
+        }
+    }
+}
+
+// Analysis Reporter
+#[derive(Debug, Clone)]
+pub enum ReportFormat {
+    Json,
+    Html,
+    Csv,
+    All,
+}
+
+pub struct AnalysisReporter {
+    output_dir: PathBuf,
+    report_format: ReportFormat,
+}
+
+impl AnalysisReporter {
+    pub fn new(output_dir: PathBuf, format: ReportFormat) -> Self {
+        Self {
+            output_dir,
+            report_format: format,
+        }
+    }
+
+    pub async fn setup_output_directory(&self) -> Result<()> {
+        async_fs::create_dir_all(&self.output_dir).await?;
+        
+        let subdirs = ["reports", "logs", "raw_data", "artifacts"];
+        for subdir in subdirs {
+            let path = self.output_dir.join(subdir);
+            async_fs::create_dir_all(path).await?;
+        }
+        
+        println!("📁 Output directory setup: {}", self.output_dir.display());
+        Ok(())
+    }
+
+    pub async fn generate_simple_report(&self, device: &UsbDevice, analysis: &ThreatAnalysis) -> Result<()> {
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("nixie_analysis_{}_{}.json", device.vendor_id, timestamp);
+        let report_path = self.output_dir.join("reports").join(filename);
+
+        let simple_report = serde_json::json!({
+            "device_info": {
+                "vendor_id": format!("{:04X}", device.vendor_id),
+                "product_id": format!("{:04X}", device.product_id),
+                "device_type": format!("{:?}", device.device_type),
+                "first_seen": device.first_seen
+            },
+            "analysis_summary": {
+                "threat_level": format!("{:?}", analysis.threat_level),
+                "total_indicators": analysis.indicators.len(),
+                "files_analyzed": analysis.file_analysis.len(),
+                "behavioral_anomalies": analysis.behavioral_analysis.anti_analysis_techniques.len()
+            },
+            "key_findings": {
+                "threat_indicators": analysis.indicators.iter().take(10).map(|i| &i.value).collect::<Vec<_>>(),
+                "suspicious_files": analysis.file_analysis.iter()
+                    .filter(|f| !f.signatures.is_empty())
+                    .map(|f| f.file_path.display().to_string())
+                    .collect::<Vec<_>>()
+            },
+            "protocol_analysis": {
+                "vid_pid": format!("{:04X}:{:04X}", device.vendor_id, device.product_id),
+                "custom_protocol_detected": true,
+                "communication_type": "Ukrainian Nixie Clock Protocol"
+            }
+        });
+
+        let json_content = serde_json::to_string_pretty(&simple_report)?;
+        async_fs::write(&report_path, json_content).await?;
+
+        println!("📄 Analysis report saved: {}", report_path.display());
+        self.print_summary(device, analysis);
+
+        Ok(())
+    }
+
+    fn print_summary(&self, device: &UsbDevice, analysis: &ThreatAnalysis) {
+        println!("\n🎯 ===== NIXIE CLOCK ANALYSIS COMPLETE =====");
+        println!("🔌 Device: {:04X}:{:04X}", device.vendor_id, device.product_id);
+        
+        let threat_emoji = match analysis.threat_level {
+            ThreatLevel::Safe => "✅",
+            ThreatLevel::Suspicious => "⚠️",
+            ThreatLevel::Malicious => "🔥",
+            ThreatLevel::Critical => "💀",
+        };
+        
+        println!("{} Threat Level: {:?}", threat_emoji, analysis.threat_level);
+        println!("📊 Files Analyzed: {}", analysis.file_analysis.len());
+        println!("🎯 Threat Indicators: {}", analysis.indicators.len());
+        
+        if !analysis.behavioral_analysis.anti_analysis_techniques.is_empty() {
+            println!("🕵️ Anti-Analysis Techniques: {:?}", analysis.behavioral_analysis.anti_analysis_techniques);
+        }
+
+        println!("🔍 Protocol: Custom Ukrainian Nixie Clock");
+        println!("📁 Full report: {}/reports/", self.output_dir.display());
+        println!("==========================================\n");
+    }
+
+    pub async fn log_event(&self, event: &str) -> Result<()> {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let log_entry = format!("[{}] {}\n", timestamp, event);
+        
+        let log_path = self.output_dir.join("logs").join("analysis.log");
+        
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .await?;
+        
+        file.write_all(log_entry.as_bytes()).await?;
+        print!("{}", log_entry);
+        
+        Ok(())
+    }
+}
+
+// Main sandbox manager
+pub struct UsbSandboxManager {
+    config: SandboxConfig,
+    active_sandboxes: Arc<RwLock<HashMap<Uuid, ActiveSandbox>>>,
+    threat_db: Arc<Mutex<database::threat_db::ThreatDatabase>>,
+    mesh_node: Arc<Mutex<coordination::mesh::MeshNode>>,
+    deception_network: Arc<Mutex<honeypot::deception_network::DeceptionNetwork>>,
+    ml_detector: Arc<Mutex<ml::isolation_forest::IsolationForestCustom>>,
+    event_bus: mpsc::Sender<SandboxEvent>,
+    reporter: AnalysisReporter,
+}
+
+impl UsbSandboxManager {
+    pub async fn new(config: SandboxConfig, reporter: AnalysisReporter) -> Result<Self> {
+        let threat_db = Arc::new(Mutex::new(
+            database::threat_db::ThreatDatabase::new("sqlite:usb_threats.db").await?
+        ));
+        
+        let mesh_node = Arc::new(Mutex::new(coordination::mesh::MeshNode::new()));
+        
+        let deception_network = Arc::new(Mutex::new(
+            honeypot::deception_network::DeceptionNetwork::new()
+                .add_honeypot("usb_filesystem", honeypot::deception_network::HoneypotType::FileServer)
+                .deploy().await?
+        ));
+        
+        let ml_detector = ml::isolation_forest::IsolationForestCustom::new(200, 15, 512);
+        let (event_tx, mut event_rx) = mpsc::channel::<SandboxEvent>(1000);
+        
+        let manager = Self {
+            config,
+            active_sandboxes: Arc::new(RwLock::new(HashMap::new())),
+            threat_db,
+            mesh_node,
+            deception_network,
+            ml_detector: Arc::new(Mutex::new(ml_detector)),
+            event_bus: event_tx,
+            reporter,
+        };
+        
+        // Start event processing loop
+        tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                Self::process_event(event).await;
+            }
+        });
+        
+        Ok(manager)
+    }
+    
+    pub async fn analyze_nixie_clock(&self) -> Result<()> {
+        // Create a mock Ukrainian nixie clock device
+        let nixie_device = UsbDevice {
+            id: Uuid::new_v4(),
+            vendor_id: 0x8087,
+            product_id: 0x0AAA,
+            device_path: PathBuf::from("USB\\VID_8087&PID_0AAA"),
+            mount_point: None,
+            device_type: UsbDeviceType::Unknown,
+            first_seen: chrono::Utc::now(),
+            threat_score: 0.3,
+        };
+
+        self.reporter.log_event("🔌 Ukrainian nixie clock detected").await?;
+        self.reporter.log_event("🚀 Starting comprehensive analysis").await?;
+
+        // Run analysis
+        let analysis = self.run_nixie_analysis(&nixie_device).await?;
+        
+        // Generate report
+        self.reporter.generate_simple_report(&nixie_device, &analysis).await?;
+        
+        Ok(())
+    }
+
+    async fn run_nixie_analysis(&self, device: &UsbDevice) -> Result<ThreatAnalysis> {
+        self.reporter.log_event("📊 Phase 1: Static analysis").await?;
+        self.reporter.log_event("🔍 Phase 2: Protocol analysis").await?;
+        self.reporter.log_event("🌐 Phase 3: Behavioral monitoring").await?;
+
+        // Create mock analysis results for the nixie clock
+        let analysis = ThreatAnalysis {
+            device_id: device.id,
+            sandbox_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            threat_level: ThreatLevel::Safe, // Nixie clock seems safe!
+            indicators: vec![
+                ThreatIndicator {
+                    indicator_type: IndicatorType::FileName,
+                    value: "TRCorp Nixie Clock".to_string(),
+                    confidence: 0.9,
+                    description: "Ukrainian nixie tube clock device".to_string(),
+                }
+            ],
+            behavioral_analysis: BehavioralAnalysis {
+                processes_created: Vec::new(),
+                files_accessed: Vec::new(),
+                network_connections: Vec::new(),
+                registry_modifications: Vec::new(),
+                api_calls: Vec::new(),
+                privilege_escalation_attempts: 0,
+                anti_analysis_techniques: Vec::new(),
+            },
+            file_analysis: Vec::new(),
+            network_analysis: None,
+            memory_analysis: None,
+        };
+
+        self.reporter.log_event("✅ Analysis completed successfully").await?;
+        Ok(analysis)
+    }
+
+    async fn process_event(event: SandboxEvent) {
+        match event {
+            SandboxEvent::ThreatDetected { sandbox_id, threat } => {
+                println!("🚨 Threat detected in sandbox {}: {:?}", sandbox_id, threat.threat_level);
+            }
+            SandboxEvent::AnalysisComplete(sandbox_id) => {
+                println!("✅ Analysis complete for sandbox {}", sandbox_id);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    println!("🔍 USB Sandbox application started, fren!");
+    
+    // Setup reporting
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let output_dir = PathBuf::from("./usb_analysis_output").join(format!("analysis_{}", timestamp));
+    let reporter = AnalysisReporter::new(output_dir, ReportFormat::All);
+    reporter.setup_output_directory().await?;
+
+    // Setup sandbox configuration
+    let config = SandboxConfig {
+        vm_type: VmType::Qemu,
+        memory_limit_mb: 2048,
+        cpu_cores: 2,
+        disk_size_mb: 10240,
+        network_isolation: NetworkIsolation::Complete,
+        filesystem_isolation: FilesystemIsolation::ReadOnly,
+        timeout_seconds: 300,
+        snapshot_enabled: true,
+        analysis_depth: AnalysisDepth::Basic,
+    };
+    
+    let manager = UsbSandboxManager::new(config, reporter).await?;
+    
+    println!("🎯 Ready to analyze USB devices, husklyfren!");
+    println!("💡 Commands:");
+    println!("   'analyze' - Analyze nixie clock");
+    println!("   'monitor' - Start real-time USB monitoring");
+    println!("   'quit' - Exit the sandbox");
+    println!("🔌 Waiting for input... (type 'help' for commands)");
+
+    "protocol" | "analyze-protocol" => {
+        println!("🔬 Starting deep protocol analysis...");
+        if let Err(e) = analyze_nixie_protocol().await {
+            println!("❌ Protocol analysis failed: {}", e);
+        }
+    }
+
+    // Interactive command loop
+    let stdin = tokio::io::stdin();
+    let mut reader = tokio::io::BufReader::new(stdin);
+    let mut line = String::new();
+
+    loop {
+        print!("sandbox> ");
+        use std::io::Write;
+        std::io::stdout().flush().unwrap();
+        
+        line.clear();
+        
+        // Read user input
+        match tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line).await {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                let command = line.trim().to_lowercase();
+                
+                match command.as_str() {
+                    "analyze" | "nixie" => {
+                        println!("🚀 Analyzing nixie clock...");
+                        if let Err(e) = manager.analyze_nixie_clock().await {
+                            println!("❌ Analysis failed: {}", e);
+                        }
+                    }
+                    "monitor" | "watch" => {
+                        println!("👀 Starting USB monitoring mode...");
+                        println!("   Plug in your nixie clock now!");
+                        println!("   Press Ctrl+C to stop monitoring");
+                        
+                        // Simulate monitoring for 30 seconds
+                        for i in 1..=30 {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            if i % 5 == 0 {
+                                println!("   📡 Monitoring... {}s", i);
+                            }
+                        }
+                        println!("   ⏹️ Monitoring stopped");
+                    }
+                    "help" | "h" => {
+                        println!("📋 Available commands:");
+                        println!("   analyze  - Run analysis on nixie clock");
+                        println!("   monitor  - Start USB device monitoring");
+                        println!("   status   - Show sandbox status");
+                        println!("   quit     - Exit the sandbox");
+                        println!("   help     - Show this help");
+                    }
+                    "status" | "s" => {
+                        println!("📊 Sandbox Status:");
+                        println!("   🟢 Sandbox: Active");
+                        println!("   📁 Output: {}", manager.reporter.output_dir.display());
+                        println!("   🔧 VM Type: {:?}", manager.config.vm_type);
+                        println!("   💾 Memory: {}MB", manager.config.memory_limit_mb);
+                    }
+                    "quit" | "exit" | "q" => {
+                        println!("👋 Shutting down USB sandbox...");
+                        break;
+                    }
+                    "" => {
+                        // Empty line, just continue
+                    }
+                    _ => {
+                        println!("❓ Unknown command: '{}'. Type 'help' for available commands.", command);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ Error reading input: {}", e);
+                break;
+            }
+        }
+    }
+    
+    println!("🏁 USB Sandbox shutdown complete. Goodbye, fren!");
+    
+    Ok(())
+}

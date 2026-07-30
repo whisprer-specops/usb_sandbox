@@ -1,0 +1,51 @@
+📦 → EP1: AA 55 02 10 00 (5)
+   💡 Command packet: seq=2, cmd=0x10 (GET_TIME), len=0
+
+📦 ← EP1: 55 AA 02 10 03 0E 1E 2D (8)
+  💡 Response packet: seq=2, cmd=0x10, len=3
+
+🔍 ===== PROTOCOL ANALYSIS RESULTS =====
+📊 Total packets captured: 47
+
+📡 Command/Response Analysis:
+  🔄 CMD:0x10 -> RSP (latency: 2.3ms)
+  🔄 CMD:0x20 -> RSP (latency: 1.8ms)
+  🔄 CMD:0x30 -> RSP (latency: 3.1ms)
+
+🔍 Pattern Analysis:
+  🎯 Pattern [AA, 55] appeared 12 times
+  🎯 Pattern [55, AA] appeared 12 times
+  🎯 Pattern [10, 00] appeared 8 times
+
+⏱️ Timing Analysis:
+  📊 Average interval: 487.3ms
+  ⚡ Fastest interval: 1.2ms
+  🐌 Slowest interval: 2001.5ms
+  🔄 Periodic pattern detected: ~500ms interval (8 occurrences)
+
+🔬 ===== PROTOCOL FINGERPRINT =====
+📋 Device: Ukrainian_Nixie_Clock_TRCorp
+
+📦 Command Structure:
+  Header: true (length: Some(2))
+  Checksum: None
+  Endianness: Little
+
+⏱️ Timing Characteristics:
+  Avg Response: 2.50ms
+  Periodic: Time Query every 500ms (confidence: 80.0%)
+
+🎯 Common Patterns:
+  Command Header: [AA, 55] (freq: 12)
+     Function: Protocol framing
+
+💡 SUSPECTED PROTOCOL DETAILS:
+  🔸 Uses AA 55 command headers
+  🔸 55 AA response headers
+  🔸 Sequence numbering for cmd/response matching
+  🔸 Command structure: [AA 55] [SEQ] [CMD] [LEN] [DATA...]
+  🔸 Response structure: [55 AA] [SEQ] [CMD] [LEN] [DATA...]
+  🔸 Command 0x10 = Get Time
+  🔸 Command 0x20 = Get Status
+  🔸 Command 0x30 = Set Brightness
+=====================================
